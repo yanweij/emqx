@@ -16,8 +16,9 @@ dep_pbkdf2	    = git https://github.com/basho/erlang-pbkdf2 2.0.0
 dep_time_compat = git https://github.com/lasp-lang/time_compat
 dep_rand_compat = git https://github.com/lasp-lang/rand_compat
 
-TEST_DEPS = cuttlefish
+TEST_DEPS = cuttlefish websocket_client
 dep_cuttlefish = git https://github.com/emqtt/cuttlefish
+dep_websocket_client = git https://github.com/jeremyong/websocket_client.git
 
 ERLC_OPTS += +'{parse_transform, lager_transform}'
 
