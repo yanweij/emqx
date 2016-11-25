@@ -407,25 +407,13 @@ auth_header_(User, Pass) ->
     {"Authorization","Basic " ++ Encoded}.
 
 websocket_test(_) ->
-    application:start(crypto),
-    application:start(websocket_client),
-    {ok, Pid} = ws_client:start_link(),
-    ws_mqtt_connect(Pid),
-    ws_mqtt_publish(Pid),
-    ws_mqtt_subscribe(Pid).
+    Conn = esockd_connection:new(esockd_transport, nil, []),
+    Req = mochiweb_request:new(Conn, 'GET', "/mqtt", {1, 1},
+                                mochiweb_headers:make([{"Sec-WebSocket-Key","Xn3fdKyc3qEXPuj2A3O+ZA=="}])),
 
-ws_mqtt_connect(Pid) ->
-    V31ConnBin = <<16,37,0,6,77,81,73,115,100,112,3,2,0,60,0,23,109,111,115,113,112,117,98,47,49,48,52,53,49,45,105,77,97,99,46,108,111,99,97>>,
-    ws_client:send_binary(Pid, V31ConnBin),
-    ws_client:send_ping(Pid, <<?PINGREQ:4, 0:4, 0:8>>).
+    ct:log("Req:~p", [Req]),
+    emqttd_http:handle_request(Req).
 
-ws_mqtt_publish(Pid) ->
-    PubBin = <<50,14,0,5,97,47,98,47,99,0,1,104,97,104,97,104>>,
-    ws_client:send_binary(Pid, PubBin).
-
-ws_mqtt_subscribe(Pid) ->
-    SubBin = <<130,11,0,2,0,6,84,111,112,105,99,65,2>>,
-    ws_client:send_binary(Pid, SubBin).
 %%--------------------------------------------------------------------
 %% cluster group
 %%--------------------------------------------------------------------

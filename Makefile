@@ -1,20 +1,20 @@
 PROJECT = emqttd
 PROJECT_DESCRIPTION = Erlang MQTT Broker
-PROJECT_VERSION = 3.0
+PROJECT_VERSION = 2.0
 
-DEPS = gproc lager gen_logger esockd mochiweb getopt pbkdf2 \
-	   clique time_compat rand_compat
+DEPS = gproc lager gen_logger esockd mochiweb
+## getopt pbkdf2 clique time_compat rand_compat
 
 dep_gproc       = git https://github.com/uwiger/gproc
 dep_getopt      = git https://github.com/jcomellas/getopt v0.8.2
 dep_lager       = git https://github.com/basho/lager master
 dep_gen_logger  = git https://github.com/emqtt/gen_logger
-dep_esockd      = git https://github.com/emqtt/esockd emq20
+dep_esockd      = git https://github.com/emqtt/esockd master
 dep_mochiweb    = git https://github.com/emqtt/mochiweb
-dep_clique      = git https://github.com/basho/clique
-dep_pbkdf2	    = git https://github.com/basho/erlang-pbkdf2 2.0.0
-dep_time_compat = git https://github.com/lasp-lang/time_compat
-dep_rand_compat = git https://github.com/lasp-lang/rand_compat
+#dep_clique     = git https://github.com/basho/clique
+#dep_pbkdf2      = git https://github.com/basho/erlang-pbkdf2 2.0.0
+#dep_time_compat = git https://github.com/lasp-lang/time_compat
+#dep_rand_compat = git https://github.com/lasp-lang/rand_compat
 
 TEST_DEPS = cuttlefish websocket_client
 dep_cuttlefish = git https://github.com/emqtt/cuttlefish
@@ -29,8 +29,9 @@ EUNIT_OPTS = verbose
 # EUNIT_ERL_OPTS =
 
 CT_SUITES = emqttd emqttd_access emqttd_lib emqttd_mod emqttd_net \
-			emqttd_mqueue emqttd_protocol emqttd_topic emqttd_trie \
-			emqttd_vm
+            emqttd_mqueue emqttd_protocol emqttd_topic emqttd_trie \
+            emqttd_vm
+
 CT_OPTS = -cover test/ct.cover.spec -erl_args -name emqttd_ct@127.0.0.1
 
 COVER = true
@@ -41,3 +42,4 @@ app:: rebar.config
 
 app.config::
 	cuttlefish -l info -e etc/ -c etc/emq.conf -i priv/emq.schema -d data/
+

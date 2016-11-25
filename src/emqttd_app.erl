@@ -1,4 +1,4 @@
-%--------------------------------------------------------------------
+%%--------------------------------------------------------------------
 %% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +23,7 @@
 %% Application callbacks
 -export([start/2, stop/1]).
 
--export([start_listener/1, stop_listener/1, is_mod_enabled/1]).
+-export([start_listener/1, stop_listener/1]).
 
 %% MQTT SockOpts
 -define(MQTT_SOCKOPTS, [binary, {packet, raw}, {reuseaddr, true},
@@ -47,7 +47,6 @@ start(_StartType, _StartArgs) ->
     start_servers(Sup),
     emqttd_cli:load(),
     register_acl_mod(),
-    load_all_mods(),
     emqttd_plugins:init(),
     emqttd_plugins:load(),
     start_listeners(),
@@ -152,26 +151,6 @@ register_acl_mod() ->
     end.
 
 %%--------------------------------------------------------------------
-%% Load Modules
-%%--------------------------------------------------------------------
-
-%% @doc Load all modules
-load_all_mods() ->
-    lists:foreach(fun load_mod/1, emqttd:env(modules, [])).
-
-load_mod({Name, Opts}) ->
-    Mod = list_to_atom("emqttd_mod_" ++ atom_to_list(Name)),
-    case catch Mod:load(Opts) of
-        ok               -> lager:info("Load module ~s successfully", [Name]);
-        {error, Error}   -> lager:error("Load module ~s error: ~p", [Name, Error]);
-        {'EXIT', Reason} -> lager:error("Load module ~s error: ~p", [Name, Reason])
-    end.
-
-%% @doc Is module enabled?
--spec(is_mod_enabled(Name :: atom()) -> boolean()).
-is_mod_enabled(Name) -> lists:keyfind(Name, 1, emqttd:env(modules, [])).
-
-%%--------------------------------------------------------------------
 %% Start Listeners
 %%--------------------------------------------------------------------
 
@@ -189,17 +168,17 @@ start_listener({ssl, ListenOn, Opts}) ->
     start_listener('mqtt:ssl', ListenOn, Opts);
 
 %% Start http listener
-start_listener({http, ListenOn, Opts}) ->
-    mochiweb:start_http('mqtt:http', ListenOn, Opts, {emqttd_http, handle_request, []});
+start_listener({Proto, ListenOn, Opts}) when Proto == http; Proto == ws ->
+    mochiweb:start_http('mqtt:ws', ListenOn, Opts, {emqttd_http, handle_request, []});
 
 %% Start https listener
-start_listener({https, ListenOn, Opts}) ->
-    mochiweb:start_http('mqtt:https', ListenOn, Opts, {emqttd_http, handle_request, []}).
+start_listener({Proto, ListenOn, Opts}) when Proto == https; Proto == wss ->
+    mochiweb:start_http('mqtt:wss', ListenOn, Opts, {emqttd_http, handle_request, []}).
 
-start_listener(Protocol, ListenOn, Opts) ->
+start_listener(Proto, ListenOn, Opts) ->
     {ok, Env} = emqttd:env(protocol),
     MFArgs = {emqttd_client, start_link, [Env]},
-    {ok, _} = esockd:open(Protocol, ListenOn, merge_sockopts(Opts), MFArgs).
+    {ok, _} = esockd:open(Proto, ListenOn, merge_sockopts(Opts), MFArgs).
 
 merge_sockopts(Options) ->
     SockOpts = emqttd_opts:merge(?MQTT_SOCKOPTS,
@@ -214,21 +193,21 @@ merge_sockopts(Options) ->
 stop_listeners() -> lists:foreach(fun stop_listener/1, emqttd:env(listeners, [])).
 
 %% @private
-stop_listener({listener, tcp, ListenOn, _Opts}) -> esockd:close('mqtt/tcp', ListenOn);
-stop_listener({listener, ssl, ListenOn, _Opts}) -> esockd:close('mqtt/ssl', ListenOn);
-stop_listener({listener, Protocol, ListenOn, _Opts}) -> esockd:close(Protocol, ListenOn).
+stop_listener({tcp, ListenOn, _Opts}) ->
+    esockd:close('mqtt:tcp', ListenOn);
+stop_listener({ssl, ListenOn, _Opts}) ->
+    esockd:close('mqtt:ssl', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) when Proto == http; Proto == ws ->
+    mochiweb:stop_http('mqtt:ws', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) when Proto == https; Proto == wss ->
+    mochiweb:stop_http('mqtt:wss', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) ->
+    esockd:close(Proto, ListenOn).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 merge_sockopts_test_() ->
     Opts =  [{acceptors, 16}, {max_clients, 512}],
     ?_assert(merge_sockopts(Opts) == [{sockopts, ?MQTT_SOCKOPTS} | Opts]).
-
-load_all_mods_test_() ->
-    ?_assert(load_all_mods() == ok).
-
-is_mod_enabled_test_() ->
-    ?_assert(is_mod_enabled(presence) == {module, presence, [{qos, 0}]}),
-    ?_assert(is_mod_enabled(test) == false).
 
 -endif.
