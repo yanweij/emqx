@@ -2,8 +2,7 @@ PROJECT = emqttd
 PROJECT_DESCRIPTION = Erlang MQTT Broker
 PROJECT_VERSION = 3.0
 
-DEPS = gproc lager gen_logger esockd mochiweb getopt gen_rpc \
-	   pbkdf2 clique time_compat rand_compat
+DEPS = gproc lager gen_logger esockd mochiweb
 
 dep_gproc       = git https://github.com/uwiger/gproc
 dep_getopt      = git https://github.com/jcomellas/getopt v0.8.2
@@ -11,17 +10,14 @@ dep_lager       = git https://github.com/basho/lager master
 dep_gen_logger  = git https://github.com/emqtt/gen_logger
 dep_esockd      = git https://github.com/emqtt/esockd master
 dep_mochiweb    = git https://github.com/emqtt/mochiweb
-dep_clique      = git https://github.com/basho/clique
-dep_pbkdf2      = git https://github.com/basho/erlang-pbkdf2 2.0.0
-dep_time_compat = git https://github.com/lasp-lang/time_compat
-dep_rand_compat = git https://github.com/lasp-lang/rand_compat
-dep_gen_rpc	    = git https://github.com/priestjim/gen_rpc.git
-
-TEST_DEPS = cuttlefish websocket_client
-dep_cuttlefish = git https://github.com/emqtt/cuttlefish
-dep_websocket_client = git https://github.com/jeremyong/websocket_client.git
 
 ERLC_OPTS += +'{parse_transform, lager_transform}'
+
+TEST_DEPS = cuttlefish emqttc
+dep_cuttlefish = git https://github.com/emqtt/cuttlefish
+dep_emqttc = git https://github.com/emqtt/emqttc
+
+NO_AUTOPATCH = cuttlefish
 
 TEST_ERLC_OPTS += +debug_info
 TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
