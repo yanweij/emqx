@@ -131,6 +131,40 @@
 -type(mqtt_connack() :: ?CONNACK_ACCEPT..?CONNACK_AUTH).
 
 %%--------------------------------------------------------------------
+%% MQTT Authenticate Return code
+%%--------------------------------------------------------------------
+-define(AUTH_SUCCESS,  16#00).
+-define(AUTH_CONTINUE, 16#18).
+-define(AUTH_RETRY,    16#19).
+
+%%--------------------------------------------------------------------
+%% MQTT Properties
+%%--------------------------------------------------------------------
+
+-type(mqtt_property() :: {'PAYLOAD_FORMAT', byte()}
+                       | {'PUBLICATION_EXPIRY', pos_integer()}
+                       | {'REPLY_TOPIC', binary()}
+                       | {'CORRELATION_DATA', binary()}
+                       | {'SUBSCRIPTION_IDENTIFIER', pos_integer()}
+                       | {'SESSION_EXPIRY_INTERVAL', pos_integer()}
+                       | {'ASSIGNED_CLIENT_IDENTIFIER', binary()}
+                       | {'SERVER_KEEP_ALIVE', pos_integer()}
+                       | {'AUTH_METHOD', binary()}
+                       | {'AUTH_DATA', binary()}
+                       | {'REQUEST_PROBLEM_INFO', byte()}
+                       | {'WILL_DELAY_INTERVAL', pos_integer()}
+                       | {'REQUEST_REPLY_INFO', byte()}
+                       | {'REPLY_INFO', binary()}
+                       | {'SERVER_REFERENCE', binary()}
+                       | {'REASON_STRING', binary()}
+                       | {'RECEIVE_MAXIMUM', pos_integer()}
+                       | {'TOPIC_ALIAS_MAXIMUM', pos_integer()}
+                       | {'TOPIC_ALIAS', pos_integer()}
+                       | {'MAXIMUM_QOS', byte()}
+                       | 'RETAIN_UNAVAILABLE'
+                       | {'USER_PROPERTY', [{binary(), binary()}]}).
+
+%%--------------------------------------------------------------------
 %% Max MQTT Packet Length
 %%--------------------------------------------------------------------
 
@@ -174,25 +208,33 @@
           will_topic  = undefined      :: undefined | binary(),
           will_msg    = undefined      :: undefined | binary(),
           username    = undefined      :: undefined | binary(),
-          password    = undefined      :: undefined | binary()
+          password    = undefined      :: undefined | binary(),
+          %% MQTT version 5.0
+          properties  = []             :: list(mqtt_property())
         }).
 
 -record(mqtt_packet_connack,
         { ack_flags = ?RESERVED :: 0 | 1,
-          return_code           :: mqtt_connack()
+          return_code           :: mqtt_connack(),
+          properties = []       :: list(mqtt_property())
         }).
 
 -record(mqtt_packet_publish,
-        { topic_name :: binary(),
-          packet_id  :: mqtt_packet_id()
+        { topic_name      :: binary(),
+          packet_id       :: mqtt_packet_id(),
+          properties = [] :: list(mqtt_property())
         }).
 
 -record(mqtt_packet_puback,
-        { packet_id :: mqtt_packet_id() }).
+        { packet_id       :: mqtt_packet_id(),
+          return_code = 0 :: byte(),
+          properties = [] :: list(mqtt_property())
+        }).
 
 -record(mqtt_packet_subscribe,
-        { packet_id   :: mqtt_packet_id(),
-          topic_table :: list({binary(), mqtt_qos()})
+        { packet_id       :: mqtt_packet_id(),
+          topic_table     :: list({binary(), mqtt_qos()}),
+          properties = [] :: list(mqtt_property())
         }).
 
 -record(mqtt_packet_unsubscribe,
@@ -201,12 +243,26 @@
         }).
 
 -record(mqtt_packet_suback,
-        { packet_id :: mqtt_packet_id(),
-          qos_table :: list(mqtt_qos() | 128)
+        { packet_id       :: mqtt_packet_id(),
+          qos_table       :: list(mqtt_qos() | 128),
+          properties = [] :: list(mqtt_property())
         }).
 
 -record(mqtt_packet_unsuback,
-        { packet_id :: mqtt_packet_id() }).
+        { packet_id         :: mqtt_packet_id(),
+          properties   = [] :: list(mqtt_property()),
+          return_codes = [] :: list(byte())
+        }).
+
+-record(mqtt_packet_disconnect,
+        { return_code     :: byte(),
+          properties = [] :: list(mqtt_property())
+        }).
+
+-record(mqtt_packet_auth,
+        { return_code :: pos_integer(),
+          properties = [] :: list(mqtt_property())
+        }).
 
 %%--------------------------------------------------------------------
 %% MQTT Control Packet
@@ -218,6 +274,7 @@
                     | #mqtt_packet_publish{} | #mqtt_packet_puback{}
                     | #mqtt_packet_subscribe{} | #mqtt_packet_suback{}
                     | #mqtt_packet_unsubscribe{} | #mqtt_packet_unsuback{}
+                    | #mqtt_packet_auth{} | list(mqtt_property())
                     | mqtt_packet_id() | undefined,
           payload  :: binary() | undefined
         }).

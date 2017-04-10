@@ -89,11 +89,16 @@ parse_frame(Bin, #mqtt_packet_header{type = Type, qos  = Qos} = Header, Length) 
               _Reserved    : 1,
               KeepAlive    : 16/big,
               Rest3/binary>>   = Rest2,
-            {ClientId,  Rest4} = parse_utf(Rest3),
-            {WillTopic, Rest5} = parse_utf(Rest4, WillFlag),
-            {WillMsg,   Rest6} = parse_msg(Rest5, WillFlag),
-            {UserName,  Rest7} = parse_utf(Rest6, UsernameFlag),
-            {PasssWord, <<>>}  = parse_utf(Rest7, PasswordFlag),
+            {Properties, Rest4} = case ProtoVersion of
+                                      ?MQTT_PROTO_V5 -> parse_properties(Rest3);
+                                      _MQTT_PROTO_V3 -> {[], Rest3}
+                                  end,
+
+            {ClientId,  Rest5} = parse_utf(Rest4),
+            {WillTopic, Rest6} = parse_utf(Rest5, WillFlag),
+            {WillMsg,   Rest7} = parse_msg(Rest6, WillFlag),
+            {UserName,  Rest8} = parse_utf(Rest7, UsernameFlag),
+            {PasssWord, <<>>}  = parse_utf(Rest8, PasswordFlag),
             case protocol_name_approved(ProtoVersion, ProtoName) of
                 true ->
                     wrap(Header,
@@ -109,7 +114,8 @@ parse_frame(Bin, #mqtt_packet_header{type = Type, qos  = Qos} = Header, Length) 
                            will_topic  = WillTopic,
                            will_msg    = WillMsg,
                            username    = UserName,
-                           password    = PasssWord}, Rest);
+                           password    = PasssWord,
+                           properties  = Properties}, Rest);
                false ->
                     {error, protocol_header_corrupt}
             end;
@@ -119,32 +125,35 @@ parse_frame(Bin, #mqtt_packet_header{type = Type, qos  = Qos} = Header, Length) 
         %                                      return_code = ReturnCode }, Rest);
         {?PUBLISH, <<FrameBin:Length/binary, Rest/binary>>} ->
             {TopicName, Rest1} = parse_utf(FrameBin),
-            {PacketId, Payload} = case Qos of
+            {PacketId, Rest2}  = case Qos of
                                       0 -> {undefined, Rest1};
                                       _ -> <<Id:16/big, R/binary>> = Rest1,
                                           {Id, R}
                                   end,
+            %%TODO: compatile with mqttv3...
+            {Properties, Payload} = parse_properties(Rest2),
             wrap(Header, #mqtt_packet_publish{topic_name = TopicName,
-                                              packet_id = PacketId},
+                                              packet_id  = PacketId,
+                                              properties = Properties},
                  Payload, Rest);
-        {?PUBACK, <<FrameBin:Length/binary, Rest/binary>>} ->
-            <<PacketId:16/big>> = FrameBin,
-            wrap(Header, #mqtt_packet_puback{packet_id = PacketId}, Rest);
-        {?PUBREC, <<FrameBin:Length/binary, Rest/binary>>} ->
-            <<PacketId:16/big>> = FrameBin,
-            wrap(Header, #mqtt_packet_puback{packet_id = PacketId}, Rest);
-        {?PUBREL, <<FrameBin:Length/binary, Rest/binary>>} ->
-            %% 1 = Qos,
-            <<PacketId:16/big>> = FrameBin,
-            wrap(Header, #mqtt_packet_puback{packet_id = PacketId}, Rest);
-        {?PUBCOMP, <<FrameBin:Length/binary, Rest/binary>>} ->
-            <<PacketId:16/big>> = FrameBin,
-            wrap(Header, #mqtt_packet_puback{packet_id = PacketId}, Rest);
+        {PubAck, <<FrameBin:Length/binary, Rest/binary>>} when PubAck =:= ?PUBACK;
+                                                               PubAck =:= ?PUBREC;
+                                                               PubAck =:= ?PUBREL;
+                                                               PubAck =:= ?PUBCOMP ->
+            %%TODO: compatile with mqttv3...
+            <<PacketId:16/big, ReturnCode:8, Rest1/binary>> = FrameBin,
+            %%TODO: compatile with mqttv3...
+            {Properties, <<>>} = parse_properties(Rest1),
+            wrap(Header, #mqtt_packet_puback{packet_id   = PacketId,
+                                             return_code = ReturnCode,
+                                             properties  = Properties}, Rest);
         {?SUBSCRIBE, <<FrameBin:Length/binary, Rest/binary>>} ->
             %% 1 = Qos,
             <<PacketId:16/big, Rest1/binary>> = FrameBin,
-            TopicTable = parse_topics(?SUBSCRIBE, Rest1, []),
+            {Properties, Rest2} = parse_properties(Rest1),
+            TopicTable = parse_topics(?SUBSCRIBE, Rest2, []),
             wrap(Header, #mqtt_packet_subscribe{packet_id   = PacketId,
+                                                properties  = Properties,
                                                 topic_table = TopicTable}, Rest);
         %{?SUBACK, <<FrameBin:Length/binary, Rest/binary>>} ->
         %    <<PacketId:16/big, Rest1/binary>> = FrameBin,
@@ -165,9 +174,17 @@ parse_frame(Bin, #mqtt_packet_header{type = Type, qos  = Qos} = Header, Length) 
         %{?PINGRESP, Rest} ->
         %    Length = 0,
         %    wrap(Header, Rest);
-        {?DISCONNECT, Rest} ->
-            Length = 0,
-            wrap(Header, Rest);
+        {?DISCONNECT, <<FrameBin:Length/binary, Rest/binary>>} ->
+            %% Length = 0,
+            <<ReturnCode:8, PropsBin/binary>> = FrameBin,
+            {Properties, <<>>} = parse_properties(PropsBin),
+            wrap(Header, #mqtt_packet_disconnect{return_code = ReturnCode,
+                                                 properties  = Properties}, Rest);
+        {?AUTH, <<FrameBin:Length/binary, Rest/binary>>} ->
+            <<ReturnCode:8, PropBin/binary>> = FrameBin,
+            {Properties, <<>>} = parse_properties(PropBin),
+            wrap(Header, #mqtt_packet_auth{return_code = ReturnCode,
+                                           properties  = Properties}, Rest);
         {_, TooShortBin} ->
             {more, fun(BinMore) ->
                 parse_frame(<<TooShortBin/binary, BinMore/binary>>,
@@ -182,11 +199,83 @@ wrap(Header, Variable, Rest) ->
 wrap(Header, Rest) ->
     {ok, #mqtt_packet{header = Header}, Rest}.
 
+parse_properties(Bin) ->
+    {Len, Bin1} = parse_variable_byte_integer(Bin),
+    <<PropBin:Len/binary, Rest/binary>> = Bin1,
+    {parse_property(PropBin, []), Rest}.
+
+parse_property(<<>>, Props) ->
+    lists:reverse(Props);
+parse_property(<<16#01, Val:8, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'PAYLOAD_FORMAT', Val} | Props]);
+parse_property(<<16#02, Val:32, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'PUBLICATION_EXPIRY', Val} | Props]);
+parse_property(<<16#08, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'REPLY_TOPIC', Val} | Props]);
+parse_property(<<16#09, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_bin(Bin),
+    parse_property(Rest, [{'CORRELATION_DATA', Val} | Props]);
+parse_property(<<16#0B, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_variable_byte_integer(Bin),
+    parse_property(Rest, [{'SUBSCRIPTION_IDENTIFIER', Val} | Props]);
+parse_property(<<16#11, Val:32, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'SESSION_EXPIRY_INTERVAL', Val} | Props]);
+parse_property(<<16#12, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'ASSIGNED_CLIENT_IDENTIFIER', Val} | Props]);
+parse_property(<<16#13, Val:16, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'SERVER_KEEP_ALIVE', Val} | Props]);
+parse_property(<<16#15, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'AUTH_METHOD', Val} | Props]);
+parse_property(<<16#16, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_bin(Bin),
+    parse_property(Rest, [{'AUTH_DATA', Val} | Props]);
+parse_property(<<16#17, Val:8, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'REQUEST_PROBLEM_INFO', Val} | Props]);
+parse_property(<<16#18, Val:32, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'WILL_DELAY_INTERVAL', Val} | Props]);
+parse_property(<<16#19, Val:8, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'REQUEST_REPLY_INFO', Val} | Props]);
+parse_property(<<16#1A, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'REPLY_INFO', Val} | Props]);
+parse_property(<<16#1C, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'SERVER_REFERENCE', Val} | Props]);
+parse_property(<<16#1F, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf(Bin),
+    parse_property(Rest, [{'REASON_STRING', Val} | Props]);
+parse_property(<<16#21, Val:16, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'RECEIVE_MAXIMUM', Val} | Props]);
+parse_property(<<16#22, Val:16, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'TOPIC_ALIAS_MAXIMUM', Val} | Props]);
+parse_property(<<16#23, Val:16, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'TOPIC_ALIAS', Val} | Props]);
+parse_property(<<16#24, Val:8, Rest/binary>>, Props) ->
+    parse_property(Rest, [{'MAXIMUM_QOS', Val} | Props]);
+parse_property(<<16#25, Rest/binary>>, Props) ->
+    parse_property(Rest, ['RETAIN_UNAVAILABLE' | Props]);
+parse_property(<<16#26, Bin/binary>>, Props) ->
+    {Val, Rest} = parse_utf_pair(Bin),
+    parse_property(Rest, [{'USER_PROPERTY', Val} | Props]).
+
 %client function
 %parse_qos(<<>>, Acc) ->
 %    lists:reverse(Acc);
 %parse_qos(<<QoS:8/unsigned, Rest/binary>>, Acc) ->
 %    parse_qos(Rest, [QoS | Acc]).
+%
+parse_variable_byte_integer(<<0:1, I:7, Rest/binary>>) ->
+    {I, Rest};
+parse_variable_byte_integer(<<1:1, I:7, Rest/binary>>) ->
+    parse_variable_byte_integer(Rest, 1, I).
+
+parse_variable_byte_integer(<<0:1, I:7, Rest/binary>>, Multiplier, Value) ->
+    {I * Multiplier + Value, Rest};
+parse_variable_byte_integer(<<1:1, I:7, Rest/binary>>, Multiplier, Value) ->
+    parse_variable_byte_integer(Rest, Multiplier * ?HIGHBIT, Value + Multiplier * I).
 
 parse_topics(_, <<>>, Topics) ->
     lists:reverse(Topics);
@@ -196,6 +285,11 @@ parse_topics(?SUBSCRIBE = Sub, Bin, Topics) ->
 parse_topics(?UNSUBSCRIBE = Sub, Bin, Topics) ->
     {Name, <<Rest/binary>>} = parse_utf(Bin),
     parse_topics(Sub, Rest, [Name | Topics]).
+
+parse_utf_pair(Bin) ->
+    {Key, Bin1} = parse_utf(Bin),
+    {Val, Rest} = parse_utf(Bin1),
+    {{Key, Val}, Rest}.
 
 parse_utf(Bin, 0) ->
     {undefined, Bin};
@@ -209,6 +303,9 @@ parse_msg(Bin, 0) ->
     {undefined, Bin};
 parse_msg(<<Len:16/big, Msg:Len/binary, Rest/binary>>, _) ->
     {Msg, Rest}.
+
+parse_bin(<<Len:16/big, Bin:Len/binary, Rest/binary>>) ->
+    {Bin, Rest}.
 
 bool(0) -> false;
 bool(1) -> true.

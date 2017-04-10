@@ -23,7 +23,7 @@
 -include("emqttd_protocol.hrl").
 
 %% API
--export([protocol_name/1, type_name/1, connack_name/1]).
+-export([protocol_name/1, type_name/1, connack_name/1, property_name/1, property_id/1]).
 
 -export([format/1]).
 
@@ -46,6 +46,52 @@ connack_name(?CONNACK_INVALID_ID)  -> 'CONNACK_INVALID_ID';
 connack_name(?CONNACK_SERVER)      -> 'CONNACK_SERVER';
 connack_name(?CONNACK_CREDENTIALS) -> 'CONNACK_CREDENTIALS';
 connack_name(?CONNACK_AUTH)        -> 'CONNACK_AUTH'.
+
+property_name(16#01) -> 'PAYLOAD_FORMAT';
+property_name(16#02) -> 'PUBLICATION_EXPIRY';
+property_name(16#08) -> 'REPLY_TOPIC';
+property_name(16#09) -> 'CORRELATION_DATA';
+property_name(16#0B) -> 'SUBSCRIPTION_IDENTIFIER';
+property_name(16#11) -> 'SESSION_EXPIRY_INTERVAL';
+property_name(16#12) -> 'ASSIGNED_CLIENT_IDENTIFIER';
+property_name(16#13) -> 'SERVER_KEEP_ALIVE';
+property_name(16#15) -> 'AUTH_METHOD';
+property_name(16#16) -> 'AUTH_DATA';
+property_name(16#17) -> 'REQUEST_PROBLEM_INFO';
+property_name(16#18) -> 'WILL_DELAY_INTERVAL';
+property_name(16#19) -> 'REQUEST_REPLY_INFO';
+property_name(16#1A) -> 'REPLY_INFO';
+property_name(16#1C) -> 'SERVER_REFERENCE';
+property_name(16#1F) -> 'REASON_STRING';
+property_name(16#21) -> 'RECEIVE_MAXIMUM';
+property_name(16#22) -> 'TOPIC_ALIAS_MAXIMUM';
+property_name(16#23) -> 'TOPIC_ALIAS';
+property_name(16#24) -> 'MAXIMUM_QOS';
+property_name(16#25) -> 'RETAIN_UNAVAILABLE';
+property_name(16#26) -> 'USER_PROPERTY'.
+
+property_id('PAYLOAD_FORMAT')             -> 16#01;
+property_id('PUBLICATION_EXPIRY')         -> 16#02;
+property_id('REPLY_TOPIC')                -> 16#08;
+property_id('CORRELATION_DATA')           -> 16#09;
+property_id('SUBSCRIPTION_IDENTIFIER')    -> 16#0B;
+property_id('SESSION_EXPIRY_INTERVAL')    -> 16#11;
+property_id('ASSIGNED_CLIENT_IDENTIFIER') -> 16#12;
+property_id('SERVER_KEEP_ALIVE')          -> 16#13;
+property_id('AUTH_METHOD')                -> 16#15;
+property_id('AUTH_DATA')                  -> 16#16;
+property_id('REQUEST_PROBLEM_INFO')       -> 16#17;
+property_id('WILL_DELAY_INTERVAL')        -> 16#18;
+property_id('REQUEST_REPLY_INFO')         -> 16#19;
+property_id('REPLY_INFO')                 -> 16#1A;
+property_id('SERVER_REFERENCE')           -> 16#1C;
+property_id('REASON_STRING')              -> 16#1F;
+property_id('RECEIVE_MAXIMUM')            -> 16#21;
+property_id('TOPIC_ALIAS_MAXIMUM')        -> 16#22;
+property_id('TOPIC_ALIAS')                -> 16#23;
+property_id('MAXIMUM_QOS')                -> 16#24;
+property_id('RETAIN_UNAVAILABLE')         -> 16#25;
+property_id('USER_PROPERTY')              -> 16#26.
 
 %% @doc Format packet
 -spec(format(mqtt_packet()) -> iolist()).

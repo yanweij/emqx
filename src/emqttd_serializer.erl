@@ -81,8 +81,9 @@ serialize_variable(?CONNECT, #mqtt_packet_connect{client_id   =  ClientId,
     {VariableBin, <<PayloadBin1/binary, UserPasswd/binary>>};
 
 serialize_variable(?CONNACK, #mqtt_packet_connack{ack_flags   = AckFlags,
-                                                  return_code = ReturnCode}, undefined) ->
-    {<<AckFlags:8, ReturnCode:8>>, <<>>};
+                                                  return_code = ReturnCode,
+                                                  properties  = Properties}, undefined) ->
+    {<<AckFlags:8, ReturnCode:8, (serialize_properties(Properties))/binary>>, <<>>};
 
 serialize_variable(?SUBSCRIBE, #mqtt_packet_subscribe{packet_id = PacketId,
                                                       topic_table = Topics }, undefined) ->
@@ -96,8 +97,11 @@ serialize_variable(?UNSUBSCRIBE, #mqtt_packet_unsubscribe{packet_id  = PacketId,
                                                           topics     = Topics }, undefined) ->
     {<<PacketId:16/big>>, serialize_topics(Topics)};
 
-serialize_variable(?UNSUBACK, #mqtt_packet_unsuback{packet_id = PacketId}, undefined) ->
-    {<<PacketId:16/big>>, <<>>};
+serialize_variable(?UNSUBACK, #mqtt_packet_unsuback{packet_id    = PacketId,
+                                                    properties   = Properties,
+                                                    return_codes = ReturnCodes}, undefined) ->
+    {<<PacketId:16/big, (serialize_properties(Properties))/binary>>,
+     serialize_return_codes(ReturnCodes)};
 
 serialize_variable(?PUBLISH, #mqtt_packet_publish{topic_name = TopicName,
                                                   packet_id  = PacketId }, PayloadBin) ->
@@ -118,13 +122,44 @@ serialize_variable(?PINGREQ, undefined, undefined) ->
 serialize_variable(?PINGRESP, undefined, undefined) ->
     {<<>>, <<>>};
 
-serialize_variable(?DISCONNECT, undefined, undefined) ->
-    {<<>>, <<>>}.
+serialize_variable(?DISCONNECT, #mqtt_packet_disconnect{return_code = ReturnCode,
+                                                        properties  = Properties}, undefined) ->
+    {<<ReturnCode:8, (serialize_properties(Properties))/binary>>, <<>>}.
 
 serialize_payload(undefined) ->
     undefined;
 serialize_payload(Bin) when is_binary(Bin) ->
     Bin.
+
+serialize_properties(Properties) ->
+    Bin = << <<(serialize_property(Property))/binary>> || Property <- Properties >>,
+    <<(serialize_variable_byte_integer(byte_size(Bin)))/binary, Bin/binary>>.
+
+serialize_property({'PAYLOAD_FORMAT', Val})             -> <<16#01, Val:8>>;
+serialize_property({'PUBLICATION_EXPIRY', Val})         -> <<16#02, Val:32>>;
+serialize_property({'REPLY_TOPIC', Val})                -> <<16#08, (serialize_utf(Val))/binary>>;
+serialize_property({'CORRELATION_DATA', Val})           -> <<16#09, (serialize_bin(Val))/binary>>;
+serialize_property({'SUBSCRIPTION_IDENTIFIER', Val})    -> <<16#0B, (serialize_variable_byte_integer(Val))/binary>>;
+serialize_property({'SESSION_EXPIRY_INTERVAL', Val})    -> <<16#11, Val:32>>;
+serialize_property({'ASSIGNED_CLIENT_IDENTIFIER', Val}) -> <<16#12, (serialize_utf(Val))/binary>>;
+serialize_property({'SERVER_KEEP_ALIVE', Val})          -> <<16#13, Val:16>>;
+serialize_property({'AUTH_METHOD', Val})                -> <<16#15, (serialize_utf(Val))/binary>>;
+serialize_property({'AUTH_DATA', Val})                  -> <<16#16, (serialize_bin(Val))/binary>>;
+serialize_property({'REQUEST_PROBLEM_INFO', Val})       -> <<16#17, Val:8>>;
+serialize_property({'WILL_DELAY_INTERVAL', Val})        -> <<16#18, Val:32>>;
+serialize_property({'REQUEST_REPLY_INFO', Val})         -> <<16#19, Val:8>>;
+serialize_property({'REPLY_INFO', Val})                 -> <<16#1A, (serialize_utf(Val))/binary>>;
+serialize_property({'SERVER_REFERENCE', Val})           -> <<16#1C, (serialize_utf(Val))/binary>>;
+serialize_property({'REASON_STRING', Val})              -> <<16#1F, (serialize_utf(Val))/binary>>;
+serialize_property({'RECEIVE_MAXIMUM', Val})            -> <<16#21, Val:16>>;
+serialize_property({'TOPIC_ALIAS_MAXIMUM', Val})        -> <<16#22, Val:16>>;
+serialize_property({'TOPIC_ALIAS', Val})                -> <<16#23, Val:16>>;
+serialize_property({'MAXIMUM_QOS', Val})                -> <<16#24, Val:8>>;
+serialize_property('RETAIN_UNAVAILABLE')                -> <<16#25>>;
+serialize_property({'USER_PROPERTY', Val})              -> <<16#26, (serialize_utf_pair(Val))/binary>>.
+
+serialize_return_codes(Codes) ->
+    << <<Code:8>> || Code <- Codes >>.
 
 serialize_topics([{_Topic, _Qos}|_] = Topics) ->
     << <<(serialize_utf(Topic))/binary, ?RESERVED:6, Qos:2>> || {Topic, Qos} <- Topics >>;
@@ -132,16 +167,24 @@ serialize_topics([{_Topic, _Qos}|_] = Topics) ->
 serialize_topics([H|_] = Topics) when is_binary(H) ->
     << <<(serialize_utf(Topic))/binary>> || Topic <- Topics >>.
 
+serialize_utf_pair({Key, Val}) ->
+    <<(serialize_utf(Key))/binary, (serialize_utf(Val))/binary>>.
+
 serialize_utf(String) ->
     StringBin = unicode:characters_to_binary(String),
     Len = byte_size(StringBin),
     true = (Len =< 16#ffff),
     <<Len:16/big, StringBin/binary>>.
 
-serialize_len(N) when N =< ?LOWBITS ->
-    <<0:1, N:7>>;
-serialize_len(N) ->
-    <<1:1, (N rem ?HIGHBIT):7, (serialize_len(N div ?HIGHBIT))/binary>>.
+serialize_bin(Bin) ->
+    <<(byte_size(Bin)):16, Bin/binary>>.
+
+serialize_len(Len) -> serialize_variable_byte_integer(Len).
+
+serialize_variable_byte_integer(I) when I =< ?LOWBITS ->
+    <<0:1, I:7>>;
+serialize_variable_byte_integer(I) ->
+    <<1:1, (I rem ?HIGHBIT):7, (serialize_variable_byte_integer(I div ?HIGHBIT))/binary>>.
 
 opt(undefined)            -> ?RESERVED;
 opt(false)                -> 0;
