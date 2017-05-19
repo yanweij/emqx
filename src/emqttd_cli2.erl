@@ -28,6 +28,7 @@ register_cli() ->
     F = fun() -> emqttd_mnesia:running_nodes() end,
     clique:register_node_finder(F),
     clique:register_writer("json", emqttd_cli_format),
+    emqttd_config_cli:register_config_cli(),
     register_usage(),
     register_cmd().
 
