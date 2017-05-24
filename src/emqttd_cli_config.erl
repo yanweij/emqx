@@ -1,11 +1,11 @@
--module (emqttd_config_cli).
+-module (emqttd_cli_config).
 
 -export ([register_config_cli/0]).
 
 -define(APP, emqttd).
 
 register_config_cli() ->
-    ok = clique_config:load_schema([code:priv_dir(emqttd)], emqttd),
+    ok = clique_config:load_schema([code:priv_dir(?APP)], ?APP),
     register_protocol_formatter(),
     register_client_formatter(),
     register_session_formatter(),
@@ -30,7 +30,7 @@ register_auth_config() ->
                   "mqtt.acl_file",
                   "mqtt.cache_acl"],
     [clique:register_config(Key , fun auth_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 auth_config_callback([_, KeyStr], Value) ->
     application:set_env(?APP, l2a(KeyStr), Value),
@@ -51,7 +51,7 @@ register_protocol_config() ->
     ConfigKeys = ["mqtt.max_clientid_len",
                   "mqtt.max_packet_size"],
     [clique:register_config(Key , fun protocol_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 protocol_config_callback([_AppStr, KeyStr], Value) ->
     protocol_config_callback(protocol, l2a(KeyStr), Value).
@@ -66,7 +66,7 @@ protocol_config_callback(App, Key, Value) ->
 register_connection_config() ->
     ConfigKeys = ["mqtt.conn.force_gc_count"],
     [clique:register_config(Key , fun connection_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 connection_config_callback([_, KeyStr0, KeyStr1], Value) ->
     KeyStr = lists:concat([KeyStr0, "_", KeyStr1]),
@@ -90,7 +90,7 @@ register_client_config() ->
                   "mqtt.client.idle_timeout",
                   "mqtt.client.enable_stats"],
     [clique:register_config(Key , fun client_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 client_config_callback([_, AppStr, KeyStr], Value) ->
     client_config_callback(l2a(AppStr), l2a(KeyStr), Value).
@@ -128,7 +128,7 @@ register_session_config() ->
                   "mqtt.session.expiry_interval",
                   "mqtt.session.ignore_loop_deliver"],
     [clique:register_config(Key , fun session_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 session_config_callback([_, AppStr, KeyStr], Value) ->
     session_config_callback(l2a(AppStr), l2a(KeyStr), Value).
@@ -162,7 +162,7 @@ register_queue_config() ->
                   "mqtt.mqueue.high_watermark",
                   "mqtt.mqueue.store_qos0"],
     [clique:register_config(Key , fun queue_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 queue_config_callback([_, AppStr, KeyStr], Value) ->
     queue_config_callback(l2a(AppStr), l2a(KeyStr), Value).
@@ -177,7 +177,7 @@ queue_config_callback(App, Key, Value) ->
 register_broker_config() ->
     ConfigKeys = ["mqtt.broker.sys_interval"],
     [clique:register_config(Key , fun broker_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 broker_config_callback([_, KeyStr0, KeyStr1], Value) ->
     KeyStr = lists:concat([KeyStr0, "_", KeyStr1]),
@@ -197,8 +197,11 @@ lager_formatter_callback(_, Params) ->
 register_lager_config() ->
     ConfigKeys = ["log.console.level"],
     [clique:register_config(Key , fun lager_config_callback/2) || Key <- ConfigKeys],
-    ok = clique:register_config_whitelist(ConfigKeys, emqttd).
+    ok = register_config_whitelist(ConfigKeys).
 
 lager_config_callback(_, Value) ->
     lager:set_loglevel(lager_console_backend, Value),
     " successfully\n".
+
+register_config_whitelist(ConfigKeys) ->
+  clique:register_config_whitelist(ConfigKeys, ?APP).

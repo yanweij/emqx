@@ -13,7 +13,6 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 %%--------------------------------------------------------------------
-
 -module(emqttd_cli).
 
 -author("Feng Lee <feng@emqtt.io>").
@@ -24,15 +23,15 @@
 
 -include("emqttd_protocol.hrl").
 
--import(lists, [foreach/2]).
+-export([register_cli/0]).
 
--import(proplists, [get_value/2]).
+-export([run/1]).
 
--export([load/0]).
+-behaviour(clique_handler).
 
--export([status/1, broker/1, cluster/1, users/1, clients/1, sessions/1,
-         routes/1, topics/1, subscriptions/1, plugins/1, bridges/1,
-         listeners/1, vm/1, mnesia/1, trace/1, acl/1]).
+-import(proplists, [get_value/2, get_value/3]).
+
+-define(APP, emqttd).
 
 -define(PROC_INFOKEYS, [status,
                         memory,
@@ -42,499 +41,1115 @@
                         stack_size,
                         reductions]).
 
--define(MAX_LIMIT, 10000).
+register_cli() ->
+    F = fun() -> emqttd_mnesia:running_nodes() end,
+    clique:register_node_finder(F),
+    clique:register_writer("json", emqttd_cli_format),
+    emqttd_cli_config:register_config_cli(),
+    register_usage(),
+    register_cmd().
 
--define(APP, emqttd).
+run([]) ->
+    All = clique_usage:find_all(),
+    io:format("--------------------------------------------------------------------------------~n"),
+    lists:foreach(fun({Cmd, Usage}) -> 
+        io:format("~p usage:", [cuttlefish_variable:format(Cmd)]),
+        io:format("~ts", [Usage]),
+        io:format("--------------------------------------------------------------------------------~n")
+    end, lists:sort(All));
+    
+run(Cmd) ->
+    clique:run(Cmd).
 
-load() ->
-    Cmds = [Fun || {Fun, _} <- ?MODULE:module_info(exports), is_cmd(Fun)],
-    [emqttd_ctl:register_cmd(Cmd, {?MODULE, Cmd}, []) || Cmd <- Cmds].
+register_usage() ->
+    clique:register_usage(["broker"],        broker_usage()),
+    clique:register_usage(["cluster"],       cluster_usage()),
+    clique:register_usage(["acl"],           acl_usage()),
+    clique:register_usage(["clients"],       clients_usage()),
+    clique:register_usage(["sessions"],      sessions_usage()),
+    clique:register_usage(["routes"],        routes_usage()),
+    clique:register_usage(["topics"],        topics_usage()),
+    clique:register_usage(["subscriptions"], subscriptions_usage()),
+    clique:register_usage(["plugins"],       plugins_usage()),
+    clique:register_usage(["bridges"],       bridges_usage()),
+    clique:register_usage(["vm"],            vm_usage()),
+    clique:register_usage(["trace"],         trace_usage()),
+    clique:register_usage(["status"],        status_usage()),
+    clique:register_usage(["listeners"],     listeners_usage()),
+    clique:register_usage(["listeners", "start"], listener_start_usage()),
+    clique:register_usage(["listeners", "stop"],listener_stop_usage()),
+    clique:register_usage(["mnesia"],        mnesia_usage()).
 
-is_cmd(Fun) ->
-    not lists:member(Fun, [init, load, module_info]).
+register_cmd() ->
 
-%%--------------------------------------------------------------------
-%% Commands
-%%--------------------------------------------------------------------
+    node_status(),
 
-%%--------------------------------------------------------------------
-%% @doc Node status
+    broker_status(),
+    broker_stats(),
+    broker_metrics(),
+    broker_pubsub(),
 
-status([]) ->
-    {InternalStatus, _ProvidedStatus} = init:get_status(),
-    ?PRINT("Node ~p is ~p~n", [node(), InternalStatus]),
-    case lists:keysearch(?APP, 1, application:which_applications()) of
-        false ->
-            ?PRINT_MSG("emqttd is not running~n");
-        {value, {?APP, _Desc, Vsn}} ->
-            ?PRINT("emqttd ~s is running~n", [Vsn])
-    end;
-status(_) ->
-     ?PRINT_CMD("status", "Show broker status").
+    cluster_join(),
+    cluster_leave(),
+    cluster_remove(),
+
+    acl_reload(),
+
+    clients_list(),
+    clients_show(),
+    clients_kick(),
+
+    sessions_list(),
+    sessions_list_persistent(),
+    sessions_list_transient(),
+    sessions_show(),
+
+    routes_list(),
+    routes_show(),
+    topics_list(),
+    topics_show(),
+
+    subscriptions_list(),
+    subscriptions_show(),
+    subscriptions_subscribe(),
+    subscriptions_del(),
+    subscriptions_unsubscribe(),
+
+    plugins_list(),
+    plugins_load(),
+    plugins_unload(),
+
+    bridges_list(),
+    bridges_start(),
+    bridges_stop(),
+
+    vm_all(),
+    vm_load(),
+    vm_memory(),
+    vm_process(),
+    vm_io(),
+    vm_ports(),
+
+    mnesia_info(),
+
+    trace_list(),
+    trace_on(),
+    trace_off(),
+
+    listeners(),
+    listeners_start(),
+    listeners_stop().
+
+node_status() ->
+    Cmd = ["status"],
+    Callback =
+        fun (_, _, _) ->
+            {Status, Vsn} = case lists:keysearch(?APP, 1, application:which_applications()) of
+                false -> 
+                    {"not running", undefined};
+                {value, {?APP, _Desc, Vsn0}} -> 
+                    {"running", Vsn0}
+            end,
+            [clique_status:table([[{node, node()}, {status, Status}, {version, Vsn}]])]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
 %%--------------------------------------------------------------------
 %% @doc Query broker
 
-broker([]) ->
-    Funs = [sysdescr, version, uptime, datetime],
-    foreach(fun(Fun) ->
-                ?PRINT("~-10s: ~s~n", [Fun, emqttd_broker:Fun()])
-            end, Funs);
+broker_status() ->
+    Cmd = ["broker", "info"],
+    Callback =
+        fun (_, _, _) ->
+            Funs = [sysdescr, version, uptime, datetime],
+            Table = lists:map(fun(Fun) ->
+                        {Fun, emqttd_broker:Fun()}
+                    end, Funs),
+            [clique_status:table([Table])]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-broker(["stats"]) ->
-    foreach(fun({Stat, Val}) ->
-                ?PRINT("~-20s: ~w~n", [Stat, Val])
-            end, emqttd_stats:getstats());
+broker_stats() ->
+    Cmd = ["broker", "stats"],
+    Callback =
+        fun (_, _, _) ->
+            lists:map(
+                fun({Key, Val}) ->
+                clique_status:list(Key, io_lib:format("~p", [Val]))
+                end, emqttd_stats:getstats())
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-broker(["metrics"]) ->
-    foreach(fun({Metric, Val}) ->
-                ?PRINT("~-24s: ~w~n", [Metric, Val])
-            end, lists:sort(emqttd_metrics:all()));
+broker_metrics() ->
+    Cmd = ["broker", "metrics"],
+    Callback =
+        fun (_, _, _) ->
+            lists:map(
+                fun({Key, Val}) ->
+                clique_status:list(Key, io_lib:format("~p", [Val]))
+                end, lists:sort(emqttd_metrics:all()))
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-broker(["pubsub"]) ->
-    Pubsubs = supervisor:which_children(emqttd_pubsub_sup:pubsub_pool()),
-    foreach(fun({{_, Id}, Pid, _, _}) ->
-                ProcInfo = erlang:process_info(Pid, ?PROC_INFOKEYS),
-                ?PRINT("pubsub: ~w~n", [Id]),
-                foreach(fun({Key, Val}) ->
-                            ?PRINT("  ~-18s: ~w~n", [Key, Val])
-                        end, ProcInfo)
-             end, lists:reverse(Pubsubs));
+broker_pubsub() ->
+    Cmd = ["broker", "pubsub"],
+    Callback =
+        fun (_, _, _) ->
+            Pubsubs = supervisor:which_children(emqttd_pubsub_sup:pubsub_pool()),
+            Table = lists:map(
+                fun({{_, Id}, Pid, _, _}) -> 
+                    ProcInfo = erlang:process_info(Pid, ?PROC_INFOKEYS),
+                    [{id, Id}] ++ ProcInfo
+                end, lists:reverse(Pubsubs)),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-broker(_) ->
-    ?USAGE([{"broker",         "Show broker version, uptime and description"},
-            {"broker pubsub",  "Show process_info of pubsub"},
-            {"broker stats",   "Show broker statistics of clients, topics, subscribers"},
-            {"broker metrics", "Show broker metrics"}]).
 
 %%--------------------------------------------------------------------
 %% @doc Cluster with other nodes
 
-cluster(["join", SNode]) ->
-    case emqttd_cluster:join(emqttd_node:parse_name(SNode)) of
-        ok ->
-            ?PRINT_MSG("Join the cluster successfully.~n"),
-            cluster(["status"]);
-        {error, Error} ->
-            ?PRINT("Failed to join the cluster: ~p~n", [Error])
-    end;
+cluster_join() ->
+    Cmd = ["cluster", "join"],
+    KeySpecs = [{'node', [{typecast, fun(Node) -> list_to_atom(Node) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('node', Params) of
+                undefined -> 
+                    io_lib:format("Invalid params node is undefined~n", []);
+                Node ->
+                    case emqttd_cluster:join(Node) of
+                        ok ->
+                            ["Join the cluster successfully.\n", cluster(["status"])];
+                        {error, Error} ->
+                            io_lib:format("Failed to join the cluster: ~p~n", [Error])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-cluster(["leave"]) ->
-    case emqttd_cluster:leave() of
-        ok ->
-            ?PRINT_MSG("Leave the cluster successfully.~n"),
-            cluster(["status"]);
-        {error, Error} ->
-            ?PRINT("Failed to leave the cluster: ~p~n", [Error])
-    end;
+cluster_leave() ->
+    Cmd = ["cluster", "leave"],
+    Callback =
+    fun(_, _, _) ->
+        Text = case emqttd_cluster:leave() of
+            ok ->
+                ["Leave the cluster successfully.\n", cluster(["status"])];
+            {error, Error} ->
+                io_lib:format("Failed to leave the cluster: ~p~n", [Error])
+        end,
+        [clique_status:text(Text)]
+    end,
+    clique:register_command(Cmd, [], [], Callback).
 
-cluster(["remove", SNode]) ->
-    case emqttd_cluster:remove(emqttd_node:parse_name(SNode)) of
-        ok ->
-            ?PRINT_MSG("Remove the node from cluster successfully.~n"),
-            cluster(["status"]);
-        {error, Error} ->
-            ?PRINT("Failed to remove the node from cluster: ~p~n", [Error])
-    end;
+cluster_remove() ->
+    Cmd = ["cluster", "remove"],
+    KeySpecs = [{'node', [{typecast, fun(Node) -> list_to_atom(Node) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('node', Params) of
+                undefined -> 
+                    io_lib:format("Invalid params node is undefined~n", []);
+                Node ->
+                    case emqttd_cluster:remove(Node) of
+                        ok ->
+                            ["Remove the cluster successfully.\n", cluster(["status"])];
+                        {error, Error} ->
+                            io_lib:format("Failed to remove the cluster: ~p~n", [Error])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
 cluster(["status"]) ->
-    ?PRINT("Cluster status: ~p~n", [emqttd_cluster:status()]);
-
-cluster(_) ->
-    ?USAGE([{"cluster join <Node>",  "Join the cluster"},
-            {"cluster leave",        "Leave the cluster"},
-            {"cluster remove <Node>","Remove the node from cluster"},
-            {"cluster status",       "Cluster status"}]).
+    io_lib:format("Cluster status: ~p~n", [emqttd_cluster:status()]).
 
 %%--------------------------------------------------------------------
-%% @doc Users usage
+%% @doc acl
 
-users(Args) -> emq_auth_username:cli(Args).
-
-acl(["reload"]) -> emqttd_access_control:reload_acl();
-acl(_) -> ?USAGE([{"acl reload", "reload etc/acl.conf"}]).
+acl_reload() ->
+    Cmd = ["acl", "reload"],
+    Callback =
+        fun (_, _, _) ->
+            emqttd_access_control:reload_acl(),
+            [clique_status:text("")]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
 %%--------------------------------------------------------------------
 %% @doc Query clients
 
-clients(["list"]) ->
-    dump(mqtt_client);
+clients_list() ->
+    Cmd = ["clients", "list"],
+    Callback =
+        fun (_, _, _) ->
+            [clique_status:table(dump(mqtt_client))]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-clients(["show", ClientId]) ->
-    if_client(ClientId, fun print/1);
+clients_show() ->
+    Cmd = ["clients", "show"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params client_id is undefined~n", []))];
+                ClientId ->
+                    [clique_status:table(if_client(ClientId, fun print/1))]
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-clients(["kick", ClientId]) ->
-    if_client(ClientId, fun(#mqtt_client{client_pid = Pid}) -> emqttd_client:kick(Pid) end);
-
-clients(_) ->
-    ?USAGE([{"clients list",            "List all clients"},
-            {"clients show <ClientId>", "Show a client"},
-            {"clients kick <ClientId>", "Kick out a client"}]).
+clients_kick() ->
+    Cmd = ["clients", "kick"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params client_id is undefined~n", []))];
+                ClientId ->
+                    Result = if_client(ClientId, fun(#mqtt_client{client_pid = Pid}) -> emqttd_client:kick(Pid) end),
+                    case Result of
+                        [ok] -> [clique_status:text(io_lib:format("Kick client_id: ~p successfully~n", [ClientId]))];
+                        _ -> [clique_status:text("")]
+                    end
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
 if_client(ClientId, Fun) ->
-    case emqttd_cm:lookup(bin(ClientId)) of
-        undefined -> ?PRINT_MSG("Not Found.~n");
-        Client    -> Fun(Client)
+    case emqttd_cm:lookup(ClientId) of
+        undefined -> ?PRINT_MSG("Not Found.~n"), [];
+        Client    -> [Fun(Client)]
     end.
 
 %%--------------------------------------------------------------------
 %% @doc Sessions Command
 
-sessions(["list"]) ->
-    dump(mqtt_local_session);
+sessions_list() ->
+    Cmd = ["sessions", "list"],
+    Callback =
+        fun (_, _, _) ->
+            [clique_status:table(dump(mqtt_local_session))]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
 %% performance issue?
 
-sessions(["list", "persistent"]) ->
-    lists:foreach(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', false, '_'}));
+sessions_list_persistent() ->
+    Cmd = ["sessions", "list", "persistent"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', false, '_'})),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
 %% performance issue?
 
-sessions(["list", "transient"]) ->
-    lists:foreach(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', true, '_'}));
+sessions_list_transient() ->
+    Cmd = ["sessions", "list", "transient"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', true, '_'})),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-sessions(["show", ClientId]) ->
-    case ets:lookup(mqtt_local_session, bin(ClientId)) of
-        []         -> ?PRINT_MSG("Not Found.~n");
-        [SessInfo] -> print(SessInfo)
-    end;
-
-sessions(_) ->
-    ?USAGE([{"sessions list",            "List all sessions"},
-            {"sessions list persistent", "List all persistent sessions"},
-            {"sessions list transient",  "List all transient sessions"},
-            {"sessions show <ClientId>", "Show a session"}]).
+sessions_show() ->
+    Cmd = ["sessions", "show"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params client_id is undefined~n", []))];
+                ClientId ->
+                    case ets:lookup(mqtt_local_session, ClientId) of
+                        []         -> 
+                            ?PRINT_MSG("Not Found.~n"),
+                            [clique_status:table([])]; 
+                        [SessInfo] -> 
+                            [clique_status:table([print(SessInfo)])]
+                    end
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
 %%--------------------------------------------------------------------
 %% @doc Routes Command
 
-routes(["list"]) ->
-    Routes = emqttd_router:dump(),
-    foreach(fun print/1, Routes);
+routes_list() ->
+        Cmd = ["routes", "list"],
+        Callback =
+            fun (_, _, _) ->
+                Table = lists:flatten(lists:map(fun print/1, emqttd_router:dump())),
+                [clique_status:table([Table])]
+            end,
+        clique:register_command(Cmd, [], [], Callback).
 
-routes(["show", Topic]) ->
-    print(mnesia:dirty_read(mqtt_route, bin(Topic)));
-
-routes(_) ->
-    ?USAGE([{"routes list",         "List all routes"},
-            {"routes show <Topic>", "Show a route"}]).
-
+routes_show() ->
+    Cmd = ["routes", "show"],
+    KeySpecs = [{'topic', [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('topic', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params topic is undefined~n", []))];
+                Topic ->
+                    [clique_status:table([print(mnesia:dirty_read(mqtt_route, Topic))])]
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
+    
 %%--------------------------------------------------------------------
 %% @doc Topics Command
 
-topics(["list"]) ->
-    lists:foreach(fun(Topic) -> ?PRINT("~s~n", [Topic]) end, emqttd:topics());
+topics_list() ->
+    Cmd = ["topics", "list"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(fun(Topic) -> [{topic, Topic}] end, emqttd:topics()),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-topics(["show", Topic]) ->
-    print(mnesia:dirty_read(mqtt_route, bin(Topic)));
+topics_show() ->
+    Cmd = ["topics", "show"],
+    KeySpecs = [{'topic', [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params topic is undefined~n", []))];
+                Topic ->
+                    Table = print(mnesia:dirty_read(mqtt_route, Topic)),
+                    [clique_status:table([Table])]
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-topics(_) ->
-    ?USAGE([{"topics list",         "List all topics"},
-            {"topics show <Topic>", "Show a topic"}]).
+%%--------------------------------------------------------------------
+%% @doc Subscriptions Command
+subscriptions_list() ->
+    Cmd = ["subscriptions", "list"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(fun(Subscription) ->
+                                  print(subscription, Subscription)
+                              end, ets:tab2list(mqtt_subscription)),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-subscriptions(["list"]) ->
-    lists:foreach(fun(Subscription) ->
-                      print(subscription, Subscription)
-                  end, ets:tab2list(mqtt_subscription));
+subscriptions_show() ->
+    Cmd = ["subscriptions", "show"],
+    KeySpecs = [{'client_id', [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params client_id is undefined~n", []))];
+                ClientId ->
+                    case ets:lookup(mqtt_subscription, ClientId) of
+                        []      -> 
+                            ?PRINT_MSG("Not Found.~n"),
+                            [clique_status:table([])];
+                        Records -> 
+                            Table = [print(subscription, Subscription) || Subscription <- Records],
+                            [clique_status:table(Table)]
+                    end
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-subscriptions(["show", ClientId]) ->
-    case ets:lookup(mqtt_subscription, bin(ClientId)) of
-        []      -> ?PRINT_MSG("Not Found.~n");
-        Records -> [print(subscription, Subscription) || Subscription <- Records]
-    end;
+subscriptions_subscribe() ->
+    Cmd = ["subscriptions", "subscribe"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]},
+                {'topic',     [{typecast, fun(Topic) -> list_to_binary(Topic) end}]},
+                {'qos',       [{typecast, fun(QoS) -> list_to_integer(QoS) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Topic = get_value('topic', Params),
+            ClientId = get_value('client_id', Params),
+            QoS = get_value('qos', Params),
+            Text = case {Topic, ClientId, QoS} of
+                {undefined, _, _} ->
+                    io_lib:format("Invalid params topic is undefined~n", []);
+                {_, undefined, _} ->
+                    io_lib:format("Invalid params client_id is undefined~n", []);
+                {_, _, undefined} ->
+                    io_lib:format("Invalid params qos is undefined~n", []);
+                {_, _, _} ->
+                    case emqttd:subscribe(Topic, ClientId, [{qos, QoS}]) of
+                        ok ->
+                            io_lib:format("Client_id: ~p subscribe topic: ~p qos: ~p successfully~n", [ClientId, Topic, QoS]);
+                        {error, already_existed} ->
+                            io_lib:format("Error: client_id: ~p subscribe topic: ~p already existed~n", [ClientId, Topic]);
+                        {error, Reason} ->
+                            io_lib:format("Error: ~p~n", [Reason])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
+subscriptions_del() ->
+    Cmd = ["subscriptions", "del"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            case get_value('client_id', Params) of
+                undefined -> 
+                    [clique_status:text(io_lib:format("Invalid params client_id is undefined~n", []))];
+                ClientId ->
+                    emqttd:subscriber_down(ClientId),
+                    Text = io_lib:format("Client_id del subscriptions:~p successfully~n", [ClientId]),
+                    [clique_status:text(Text)]
+            end
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-subscriptions(["add", ClientId, Topic, QoS]) ->
-   Add = fun(IntQos) ->
-           case emqttd:subscribe(bin(Topic), bin(ClientId), [{qos, IntQos}]) of
-               ok ->
-                   ?PRINT_MSG("ok~n");
-               {error, already_existed} ->
-                   ?PRINT_MSG("Error: already existed~n");
-               {error, Reason} ->
-                   ?PRINT("Error: ~p~n", [Reason])
-           end
-         end,
-   if_valid_qos(QoS, Add);
+subscriptions_unsubscribe() ->
+    Cmd = ["subscriptions", "unsubscribe"],
+    KeySpecs = [{'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]},
+                {'topic',     [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Topic = get_value('topic', Params),
+            ClientId = get_value('client_id', Params),
+            QoS = get_value('qos', Params),
+            Text = case {Topic, ClientId, QoS} of
+                {undefined, _, _} ->
+                    io_lib:format("Invalid params topic is undefined~n", []);
+                {_, undefined, _} ->
+                    io_lib:format("Invalid params client_id is undefined~n", []);
+                {_, _, undefined} ->
+                    io_lib:format("Invalid params qos is undefined~n", []);
+                    
+                {_, _, _} ->
+                    emqttd:unsubscribe(Topic, ClientId),
+                    io_lib:format("Client_id: ~p unsubscribe topic: ~p successfully~n", [ClientId, Topic])
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
+   
+%%--------------------------------------------------------------------
+%% @doc Plugins Command
+plugins_list() ->
+    Cmd = ["plugins", "list"],
+    Callback =
+        fun (_, _, _) ->
+                Text = lists:map(fun(Plugin) -> print(Plugin) end, emqttd_plugins:list()),
+                [clique_status:table(Text)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
+plugins_load() ->
+    Cmd = ["plugins", "load"],
+    KeySpecs = [{'plugin_name', [{typecast, fun(PluginName) -> list_to_atom(PluginName) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('plugin_name', Params) of
+                undefined -> 
+                    io_lib:format("Invalid params plugin_name is undefined~n", []);
+                PluginName ->
+                    case emqttd_plugins:load(PluginName) of
+                        {ok, StartedApps} ->
+                            io_lib:format("Start apps: ~p~nPlugin ~s loaded successfully.~n", [StartedApps, PluginName]);
+                        {error, Reason}   ->
+                            io_lib:format("load plugin error: ~p~n", [Reason])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
+plugins_unload() ->
+    Cmd = ["plugins", "unload"],
+    KeySpecs = [{'plugin_name', [{typecast, fun(PluginName) -> list_to_atom(PluginName) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('plugin_name', Params) of
+                undefined -> 
+                    io_lib:format("Invalid params plugin_name is undefined~n", []);
+                PluginName ->
+                    case emqttd_plugins:unload(PluginName) of
+                        ok ->
+                            io_lib:format("Plugin ~s unloaded successfully.~n", [PluginName]);
+                        {error, Reason} ->
+                            io_lib:format("unload plugin error: ~p~n", [Reason])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-subscriptions(["del", ClientId]) ->
-   Ok = emqttd:subscriber_down(bin(ClientId)),
-   ?PRINT("~p~n", [Ok]);
-
-subscriptions(["del", ClientId, Topic]) ->
-   Ok = emqttd:unsubscribe(bin(Topic), bin(ClientId)),
-   ?PRINT("~p~n", [Ok]);
-
-
-subscriptions(_) ->
-    ?USAGE([{"subscriptions list",                         "List all subscriptions"},
-            {"subscriptions show <ClientId>",              "Show subscriptions of a client"},
-            {"subscriptions add <ClientId> <Topic> <QoS>", "Add a static subscription manually"},
-            {"subscriptions del <ClientId>",               "Delete static subscriptions manually"},
-            {"subscriptions del <ClientId> <Topic>",       "Delete a static subscription manually"}]).
-
-% if_could_print(Tab, Fun) ->
-%    case mnesia:table_info(Tab, size) of
-%        Size when Size >= ?MAX_LIMIT ->
-%            ?PRINT("Could not list, too many ~ss: ~p~n", [Tab, Size]);
-%        _Size ->
-%            Keys = mnesia:dirty_all_keys(Tab),
-%            foreach(fun(Key) -> Fun(ets:lookup(Tab, Key)) end, Keys)
-%    end.
-
-if_valid_qos(QoS, Fun) ->
-    try list_to_integer(QoS) of
-        Int when ?IS_QOS(Int) -> Fun(Int);
-        _ -> ?PRINT_MSG("QoS should be 0, 1, 2~n")
-    catch _:_ ->
-        ?PRINT_MSG("QoS should be 0, 1, 2~n")
-    end.
-
-plugins(["list"]) ->
-    foreach(fun print/1, emqttd_plugins:list());
-
-plugins(["load", Name]) ->
-    case emqttd_plugins:load(list_to_atom(Name)) of
-        {ok, StartedApps} ->
-            ?PRINT("Start apps: ~p~nPlugin ~s loaded successfully.~n", [StartedApps, Name]);
-        {error, Reason}   ->
-            ?PRINT("load plugin error: ~p~n", [Reason])
-    end;
-
-plugins(["unload", Name]) ->
-    case emqttd_plugins:unload(list_to_atom(Name)) of
-        ok ->
-            ?PRINT("Plugin ~s unloaded successfully.~n", [Name]);
-        {error, Reason} ->
-            ?PRINT("unload plugin error: ~p~n", [Reason])
-    end;
-
-plugins(_) ->
-    ?USAGE([{"plugins list",            "Show loaded plugins"},
-            {"plugins load <Plugin>",   "Load plugin"},
-            {"plugins unload <Plugin>", "Unload plugin"}]).
 
 %%--------------------------------------------------------------------
 %% @doc Bridges command
 
-bridges(["list"]) ->
-    foreach(fun({Node, Topic, _Pid}) ->
-                ?PRINT("bridge: ~s--~s-->~s~n", [node(), Topic, Node])
-            end, emqttd_bridge_sup_sup:bridges());
+bridges_list() ->
+    Cmd = ["bridges", "list"],
+    Callback =
+        fun (_, _, _) ->
+                Text = lists:map(
+                    fun({Node, Topic, _Pid}) -> 
+                        [{bridge, node()}, {topic, Topic}, {node, Node}]
+                    end, emqttd_bridge_sup_sup:bridges()),
+                [clique_status:table(Text)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-bridges(["options"]) ->
-    ?PRINT_MSG("Options:~n"),
-    ?PRINT_MSG("  qos     = 0 | 1 | 2~n"),
-    ?PRINT_MSG("  prefix  = string~n"),
-    ?PRINT_MSG("  suffix  = string~n"),
-    ?PRINT_MSG("  queue   = integer~n"),
-    ?PRINT_MSG("Example:~n"),
-    ?PRINT_MSG("  qos=2,prefix=abc/,suffix=/yxz,queue=1000~n");
+bridges_start() ->
+    Cmd = ["bridges", "start"],
+    KeySpecs = [{'snode',         [{typecast, fun(SNode)  -> list_to_atom(SNode) end}]},
+                {'topic',         [{typecast, fun(Topic)  -> list_to_binary(Topic) end}]},
+                {'qos',           [{typecast, fun(Qos)    -> list_to_integer(Qos) end}]},
+                {'topic_suffix',  [{typecast, fun(Prefix) -> list_to_binary(Prefix) end}]},
+                {'topic_prefix',  [{typecast, fun(Suffix) -> list_to_binary(Suffix) end}]},
+                {'max_queue_len', [{typecast, fun(Queue)  -> list_to_integer(Queue) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case {get_value('snode', Params), get_value('topic', Params)} of
+                {undefined, _} ->
+                    io_lib:format("Invalid params snode is undefined~n", []);
+                {_, undefined} ->
+                    io_lib:format("Invalid params topic is undefined~n", []);
+                {SNode, Topic} ->
+                    Opts = Params -- [{'snode', SNode}, {'topic', Topic}],
+                    case emqttd_bridge_sup_sup:start_bridge(SNode, Topic, Opts) of
+                        {ok, _} -> 
+                            io_lib:format("bridge is started.~n", []);
+                        {error, Error} -> 
+                            io_lib:format("error: ~p~n", [Error])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-bridges(["start", SNode, Topic]) ->
-    case emqttd_bridge_sup_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
-        {ok, _}        -> ?PRINT_MSG("bridge is started.~n");
-        {error, Error} -> ?PRINT("error: ~p~n", [Error])
-    end;
-
-bridges(["start", SNode, Topic, OptStr]) ->
-    Opts = parse_opts(bridge, OptStr),
-    case emqttd_bridge_sup_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic), Opts) of
-        {ok, _}        -> ?PRINT_MSG("bridge is started.~n");
-        {error, Error} -> ?PRINT("error: ~p~n", [Error])
-    end;
-
-bridges(["stop", SNode, Topic]) ->
-    case emqttd_bridge_sup_sup:stop_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
-        ok             -> ?PRINT_MSG("bridge is stopped.~n");
-        {error, Error} -> ?PRINT("error: ~p~n", [Error])
-    end;
-
-bridges(_) ->
-    ?USAGE([{"bridges list",                 "List bridges"},
-            {"bridges options",              "Bridge options"},
-            {"bridges start <Node> <Topic>", "Start a bridge"},
-            {"bridges start <Node> <Topic> <Options>", "Start a bridge with options"},
-            {"bridges stop <Node> <Topic>", "Stop a bridge"}]).
-
-parse_opts(Cmd, OptStr) ->
-    Tokens = string:tokens(OptStr, ","),
-    [parse_opt(Cmd, list_to_atom(Opt), Val)
-        || [Opt, Val] <- [string:tokens(S, "=") || S <- Tokens]].
-parse_opt(bridge, qos, Qos) ->
-    {qos, list_to_integer(Qos)};
-parse_opt(bridge, suffix, Suffix) ->
-    {topic_suffix, bin(Suffix)};
-parse_opt(bridge, prefix, Prefix) ->
-    {topic_prefix, bin(Prefix)};
-parse_opt(bridge, queue, Len) ->
-    {max_queue_len, list_to_integer(Len)};
-parse_opt(_Cmd, Opt, _Val) ->
-    ?PRINT("Bad Option: ~s~n", [Opt]).
+bridges_stop() ->
+    Cmd = ["bridges", "stop"],
+    KeySpecs = [{'snode',  [{typecast, fun(SNode) -> list_to_atom(SNode) end}]},
+                {'topic',  [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case {get_value('snode', Params), get_value('topic', Params)} of
+                {undefined, _} ->
+                    io_lib:format("Invalid params snode is undefined~n", []);
+                {_, undefined} ->
+                    io_lib:format("Invalid params topic is undefined~n", []);
+                {SNode, Topic} ->
+                    case emqttd_bridge_sup_sup:stop_bridge(SNode, Topic) of
+                        ok             -> io_lib:format("bridge is stopped.~n", []);
+                        {error, Error} -> io_lib:format("error: ~p~n", [Error])
+                    end
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
 %%--------------------------------------------------------------------
 %% @doc vm command
 
-vm([]) ->
-    vm(["all"]);
+vm_all() ->
+    Cmd = ["vm","info"],
+    Callback =
+        fun (_, _, _) ->
+            Cpu = [vm_info("cpu", K, list_to_float(V)) || {K, V} <- emqttd_vm:loads()],
+            Memory = [vm_info("memory", K, V) || {K, V} <- erlang:memory()],
+            Process = [vm_info("process", K, erlang:system_info(V)) || {K, V} <- [{limit, process_limit}, {count, process_count}]],
+            IoInfo = erlang:system_info(check_io),
+            Io = [vm_info("io", K, get_value(K, IoInfo)) || K <- [max_fds, active_fds]],
+            Ports = [vm_info("ports", K, erlang:system_info(V)) || {K, V} <- [{count, port_count}, {limit, port_limit}]],
+            lists:flatten([Cpu, Memory, Process, Io, Ports])
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-vm(["all"]) ->
-    [vm([Name]) || Name <- ["load", "memory", "process", "io", "ports"]];
+vm_info(Item, K, V) ->
+    clique_status:list(format_key(Item, K), io_lib:format("~p", [V])).
 
-vm(["load"]) ->
-    [?PRINT("cpu/~-20s: ~s~n", [L, V]) || {L, V} <- emqttd_vm:loads()];
+format_key(Item, K) ->
+    list_to_atom(lists:concat([Item, "/", K])).
 
-vm(["memory"]) ->
-    [?PRINT("memory/~-17s: ~w~n", [Cat, Val]) || {Cat, Val} <- erlang:memory()];
+vm_load() ->
+    Cmd = ["vm","load"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(
+                fun({Name, Val}) -> 
+                    [{name, Name}, {val, Val}]
+                end, emqttd_vm:loads()),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-vm(["process"]) ->
-    foreach(fun({Name, Key}) ->
-                ?PRINT("process/~-16s: ~w~n", [Name, erlang:system_info(Key)])
-            end, [{limit, process_limit}, {count, process_count}]);
+vm_memory() ->
+    Cmd = ["vm","memory"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(
+                        fun({Name, Val}) -> 
+                            [{name, Name}, {val, Val}]
+                        end, erlang:memory()),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-vm(["io"]) ->
-    IoInfo = erlang:system_info(check_io),
-    foreach(fun(Key) ->
-                ?PRINT("io/~-21s: ~w~n", [Key, get_value(Key, IoInfo)])
-            end, [max_fds, active_fds]);
+vm_process() ->
+    Cmd = ["vm","process"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(
+                        fun({Name, Val}) -> 
+                            [{name, Name}, {val, erlang:system_info(Val)}]
+                        end, [{limit, process_limit}, {count, process_count}]),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-vm(["ports"]) ->
-    foreach(fun({Name, Key}) ->
-                ?PRINT("ports/~-16s: ~w~n", [Name, erlang:system_info(Key)])
-            end, [{count, port_count}, {limit, port_limit}]);
+vm_io() ->
+    Cmd = ["vm","io"],
+    Callback =
+        fun (_, _, _) ->
+            IoInfo = erlang:system_info(check_io),
+            Table = lists:map(
+                        fun(Key) -> 
+                            [{name, Key}, {val, get_value(Key, IoInfo)}]
+                        end, [max_fds, active_fds]),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-vm(_) ->
-    ?USAGE([{"vm all",     "Show info of Erlang VM"},
-            {"vm load",    "Show load of Erlang VM"},
-            {"vm memory",  "Show memory of Erlang VM"},
-            {"vm process", "Show process of Erlang VM"},
-            {"vm io",      "Show IO of Erlang VM"},
-            {"vm ports",   "Show Ports of Erlang VM"}]).
+vm_ports() ->
+    Cmd = ["vm","ports"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(
+                        fun({Name, Val}) -> 
+                            [{name, Name}, {val, erlang:system_info(Val)}]
+                        end, [{count, port_count}, {limit, port_limit}]),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-%%--------------------------------------------------------------------
+% %%--------------------------------------------------------------------
 %% @doc mnesia Command
 
-mnesia([]) ->
-    mnesia:system_info();
-
-mnesia(_) ->
-    ?PRINT_CMD("mnesia", "Mnesia system info").
+mnesia_info() ->
+    Cmd = ["mnesia", "info"],
+    Callback =
+        fun (_, _, _) ->
+            mnesia:system_info(),
+            [clique_status:text("")]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
 %%--------------------------------------------------------------------
 %% @doc Trace Command
 
-trace(["list"]) ->
-    foreach(fun({{Who, Name}, LogFile}) ->
-                ?PRINT("trace ~s ~s -> ~s~n", [Who, Name, LogFile])
-            end, emqttd_trace:all_traces());
+trace_list() ->
+    Cmd = ["trace", "list"],
+    Callback =
+        fun (_, _, _) ->
+            Table = lists:map(fun({{Who, Name}, LogFile}) ->
+                [{trace, Who}, {name, Name}, {log_file, LogFile}]
+            end, emqttd_trace:all_traces()),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-trace(["client", ClientId, "off"]) ->
-    trace_off(client, ClientId);
+trace_on() ->
+    Cmd = ["trace"],
+    KeySpecs = [{'type',      [{typecast, fun(Type)     -> list_to_atom(Type) end}]},
+                {'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]},
+                {'topic',     [{typecast, fun(Topic)    -> list_to_binary(Topic) end}]},
+                {'log_file',  [{typecast, fun(LogFile)  -> list_to_binary(LogFile) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('type', Params) of
+                client -> 
+                    trace_on(client, get_value('client_id', Params), get_value('log_file', Params));
+                topic  -> 
+                    trace_on(topic, get_value('topic', Params), get_value('log_file', Params));
+                Type   ->
+                    io_lib:format("Invalid params type: ~p error~n", [Type])
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
-trace(["client", ClientId, LogFile]) ->
-    trace_on(client, ClientId, LogFile);
-
-trace(["topic", Topic, "off"]) ->
-    trace_off(topic, Topic);
-
-trace(["topic", Topic, LogFile]) ->
-    trace_on(topic, Topic, LogFile);
-
-trace(_) ->
-    ?USAGE([{"trace list",                       "List all traces"},
-            {"trace client <ClientId> <LogFile>","Trace a client"},
-            {"trace client <ClientId> off",      "Stop tracing a client"},
-            {"trace topic <Topic> <LogFile>",    "Trace a topic"},
-            {"trace topic <Topic> off",          "Stop tracing a Topic"}]).
+trace_off() ->
+    Cmd = ["trace", "off"],
+    KeySpecs = [{'type',      [{typecast, fun(Type) -> list_to_atom(Type) end}]},
+                {'client_id', [{typecast, fun(ClientId) -> list_to_binary(ClientId) end}]},
+                {'topic',     [{typecast, fun(Topic) -> list_to_binary(Topic) end}]}],
+    FlagSpecs = [],
+    Callback =
+        fun (_, Params, _) ->
+            Text = case get_value('type', Params) of
+                client -> 
+                    trace_off(client, get_value('client_id', Params));
+                topic  -> 
+                    trace_off(topic, get_value('topic', Params));
+                Type   ->
+                    io_lib:format("Invalid params type: ~p error~n", [Type])
+            end,
+            [clique_status:text(Text)]
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
 
 trace_on(Who, Name, LogFile) ->
-    case emqttd_trace:start_trace({Who, iolist_to_binary(Name)}, LogFile) of
+    case emqttd_trace:start_trace({Who, Name}, LogFile) of
         ok ->
-            ?PRINT("trace ~s ~s successfully.~n", [Who, Name]);
+            io_lib:format("trace ~s ~s successfully.~n", [Who, Name]);
         {error, Error} ->
-            ?PRINT("trace ~s ~s error: ~p~n", [Who, Name, Error])
+            io_lib:format("trace ~s ~s error: ~p~n", [Who, Name, Error])
     end.
 
 trace_off(Who, Name) ->
-    case emqttd_trace:stop_trace({Who, iolist_to_binary(Name)}) of
+    case emqttd_trace:stop_trace({Who, Name}) of
         ok -> 
-            ?PRINT("stop tracing ~s ~s successfully.~n", [Who, Name]);
+            io_lib:format("stop tracing ~s ~s successfully.~n", [Who, Name]);
         {error, Error} ->
-            ?PRINT("stop tracing ~s ~s error: ~p.~n", [Who, Name, Error])
+            io_lib:format("stop tracing ~s ~s error: ~p.~n", [Who, Name, Error])
     end.
 
 %%--------------------------------------------------------------------
 %% @doc Listeners Command
 
-listeners([]) ->
-    foreach(fun({{Protocol, ListenOn}, Pid}) ->
-                Info = [{acceptors,      esockd:get_acceptors(Pid)},
-                        {max_clients,    esockd:get_max_clients(Pid)},
-                        {current_clients,esockd:get_current_clients(Pid)},
-                        {shutdown_count, esockd:get_shutdown_count(Pid)}],
-                ?PRINT("listener on ~s:~s~n", [Protocol, esockd:to_string(ListenOn)]),
-                foreach(fun({Key, Val}) ->
-                            ?PRINT("  ~-16s: ~w~n", [Key, Val])
-                        end, Info)
-            end, esockd:listeners());
+listeners() ->
+    Cmd = ["listeners", "info"],
+    Callback =
+        fun (_, _, _) ->
+            Table = 
+                lists:map(fun({{Protocol, ListenOn}, Pid}) ->
+                    Info = [{acceptors,      esockd:get_acceptors(Pid)},
+                            {max_clients,    esockd:get_max_clients(Pid)},
+                            {current_clients,esockd:get_current_clients(Pid)},
+                            {shutdown_count, esockd:get_shutdown_count(Pid)}],
+                    Listener = io_lib:format("~s:~s~n", [Protocol, esockd:to_string(ListenOn)]),
+                    [{listener, Listener}| Info]
+                end, esockd:listeners()),
+            [clique_status:table(Table)]
+        end,
+    clique:register_command(Cmd, [], [], Callback).
 
-listeners(_) ->
-    ?PRINT_CMD("listeners", "List listeners").
+listeners_start() ->
+    Cmd = ["listeners", "start"],
+    KeySpecs = [{'address',             [{typecast, fun parse_addr/1}]},
+                {'port',                [{typecast, fun parse_port/1}]},
+                {'type',                [{typecast, fun parse_type/1}]}],
+    FlagSpecs = [{acceptors,            [{longname, "acceptors"},
+                                         {typecast, fun(Acceptors) -> list_to_integer(Acceptors) end}]},
+                 {max_clients,          [{longname, "max_clients"},
+                                         {typecast, fun(MaxClients) -> list_to_integer(MaxClients) end}]},
+                 {backlog,              [{longname, "backlog"},
+                                         {typecast, fun(Backlog) -> list_to_integer(Backlog) end}]},
+                 {buffer,               [{longname, "buffer"},
+                                         {typecast, fun(Buffer) -> list_to_integer(Buffer) end}]},
+                 {tls_versions,         [{longname, "tls_versions"},
+                                         {typecast, fun(TlsVersions) -> list_to_atom(TlsVersions) end}]},
+                 {handshake_timeout,    [{longname, "handshake_timeout"},
+                                         {typecast, fun(HandshakeTimeout) -> list_to_integer(HandshakeTimeout) end}]},
+                 {reuse_sessions,       [{longname, "reuse_sessions"},
+                                         {typecast, fun(ReuseSessions) -> list_to_atom(ReuseSessions) end}]},
+                 {keyfile,              [{longname, "keyfile"},
+                                         {typecast, fun(Keyfile) -> Keyfile end}]},
+                 {certfile,             [{longname, "certfile"},
+                                         {typecast, fun(Certfile) -> Certfile end}]},
+                 {cacertfile,           [{longname, "cacertfile"},
+                                         {typecast, fun(Cacertfile) -> Cacertfile end}]},
+                 {dhfile,               [{longname, "dhfile"},
+                                         {typecast, fun(Dhfile) -> Dhfile end}]},
+                 {verify,               [{longname, "verify"},
+                                         {typecast, fun(Verify) -> list_to_atom(Verify) end}]},
+                 {fail_if_no_peer_cert, [{longname, "fail_if_no_peer_cert"},
+                                         {typecast, fun(FailIfNoPeerCert) -> list_to_atom(FailIfNoPeerCert) end}]}],
+    Callback =
+        fun (_, Params, Flag) ->
+            Address = get_value('address', Params),
+            Port  = get_value('port', Params),
+            Type = get_value('type', Params),
+            Text = case {Type, Port}of
+                {undefined, _} ->
+                    io_lib:format("Invalid params type: ~p error~n", [Type]);
+                {_, undefined} ->
+                    io_lib:format("Invalid params port: ~p error~n", [Type]);
+                {_, _} ->
+                    ListenOn = case Address of
+                        undefined -> Port;
+                        _ -> {Address, Port}
+                    end,
+                    Opts = parse_opts(Type, Flag),
+                    case emqttd_app:start_listener({Type, ListenOn, Opts}) of
+                        {ok, _} -> 
+                            io_lib:format("Start mqtt:~p listen on ~p successfully", [Type, ListenOn]); 
+                        Error ->
+                            io_lib:format("Start mqtt:~p listen on ~p failed, error:~p~n", [Type, ListenOn, Error])
+                    end
+            end,
+            [clique_status:text(Text)]  
+        end,
+    clique:register_command(Cmd, KeySpecs, FlagSpecs, Callback).
+
+listeners_stop() ->
+    Cmd = ["listeners", "stop"],
+    KeySpecs = [{'address', [{typecast, fun parse_addr/1}]},
+                {'port',    [{typecast, fun parse_port/1}]},
+                {'type',    [{typecast, fun parse_type/1}]}],
+    Callback =
+        fun (_, Params, _) ->
+            Address = get_value('address', Params),
+            Port  = get_value('port', Params),
+            Type = get_value('type', Params),
+            Text = case {Type, Port}of
+                {undefined, _} ->
+                    io_lib:format("Invalid params type: ~p error~n", [Type]);
+                {_, undefined} ->
+                    io_lib:format("Invalid params port: ~p error~n", [Type]);
+                {_, _} ->
+                    case Address of
+                        undefined -> 
+                            emqttd_app:stop_listener({Type, Port, []}),
+                            io_lib:format("stopped mqtt:~p on ~p~n", [Type, Port]);
+                        Address -> 
+                            emqttd_app:stop_listener({Type, {Address, Port}, []}),
+                            io_lib:format("stopped mqtt:~p on ~p:~p~n", [Type, emqttd_net:ntoa(Address), Port])
+                    end
+            end,
+            [clique_status:text(Text)]  
+        end,
+    clique:register_command(Cmd, KeySpecs, [], Callback).
+
+parse_opts(Type, Opts) when Type == ssl 
+                        orelse Type == wss 
+                        orelse Type == https ->
+
+    OptList = [handshake_timeout, reuse_sessions, keyfile, certfile, 
+               cacertfile, dhfile, verify, fail_if_no_peer_cert],
+     SslOpts = lists:foldl(
+        fun(Opt, Acc) -> 
+            case get_value(Opt, Opts) of
+                undefined -> Acc;
+                OptVal    -> [[{Opt, OptVal}] | Acc]
+            end
+        end, [], OptList) ++
+     case get_value(tls_versions, Opts) of
+         undefined  -> [];
+         TlsVersions -> [{versions, [TlsVersions]}]
+     end,
+    case SslOpts of
+        [] -> parse_opts(undefined, Opts);
+        _  -> [{sslopts, SslOpts}] ++ parse_opts(undefined, Opts)
+    end;
+parse_opts(_Type, Opts) ->
+    Acceptors = get_value(acceptors, Opts, 4),
+    MaxClients = get_value(max_clients, Opts, 1024),
+    Buffer = get_value(buffer, Opts, 4096),
+    Backlog = get_value(backlog, Opts, 1024),
+    [{acceptors, Acceptors}, 
+     {max_clients, MaxClients}, 
+     {sockopts, [{buffer, Buffer}, {backlog, Backlog}]}].
+
+
+parse_port(Port) ->
+    case catch list_to_integer(Port) of
+        P when (P >= 0) and (P=<65535) -> P;
+        _ -> {error, {invalid_args,[{port, Port}]}}
+    end.
+
+parse_addr(Addr) ->
+    case inet:parse_address(Addr) of
+        {ok, Ip} -> Ip;
+        {error, einval} ->
+            {error, {invalid_args,[{address, Addr}]}}
+    end.
+
+parse_type(Type) ->
+    case catch list_to_atom(Type) of
+        T when (T=:=tcp) orelse 
+               (T=:=ssl) orelse 
+               (T=:=ws) orelse 
+               (T=:=wss) orelse 
+               (T=:=http) orelse 
+               (T=:=https) -> T;
+        _ -> {error, {invalid_args,[{type, Type}]}}
+    end.
+
+
+%%-------------------------------------------------------------
+%% usage
+%%-------------------------------------------------------------
+broker_usage() ->
+    ["\n  broker info       Show broker version, uptime and description\n",
+     "  broker pubsub     Show process_info of pubsub\n",
+     "  broker stats      Show broker statistics of clients, topics, subscribers\n",
+     "  broker metrics    Show broker metrics\n"].
+
+cluster_usage() ->
+    ["\n  cluster join node=<Node>     Join the cluster\n",
+     "  cluster leave                Leave the cluster\n",
+     "  cluster remove node=<Node>   Remove the node from cluster\n",
+     "  cluster status               Cluster status\n"].
+
+acl_usage() ->
+    ["\n  acl reload    reload etc/acl.conf\n"].
+
+clients_usage() ->
+    ["\n  clients list                         List all clients\n",
+     "  clients show client_id=<ClientId>    Show a client\n",
+     "  clients kick client_id=<ClientId>    Kick out a client\n"].
+
+sessions_usage() ->
+    ["\n  sessions list                         List all sessions\n",
+     "  sessions list persistent              List all persistent sessions\n",
+     "  sessions list transient               List all transient sessions\n",
+     "  sessions show client_id=<ClientId>    Show a session\n"].
+
+routes_usage() ->
+    ["\n  routes list                  List all routes\n",
+     "  routes show topic=<Topic>    Show a route\n"].
+
+topics_usage() ->
+    ["\n  topics list                  List all topics\n",
+     "  topics show topic=<Topic>    Show a topic\n"].
+
+subscriptions_usage() ->
+    ["\n  subscriptions list                                                    List all subscriptions\n",
+     "  subscriptions show client_id=<ClientId>                               Show subscriptions of a client\n",
+     "  subscriptions subscribe client_id=<ClientId> topic=<Topic> qos=<Qos>  Add a static subscription manually\n",
+     "  subscriptions del client_id=<ClientId>                                Delete static subscriptions manually\n",
+     "  subscriptions unsubscribe client_id=<ClientId> topic=<Topic>          Delete a static subscription manually\n"].
+
+plugins_usage() ->
+    ["\n  plugins list                           Show loaded plugins\n",
+     "  plugins load plugin_name=<Plugin>      Load plugin\n",
+     "  plugins unload plugin_name=<Plugin>    Unload plugin\n"].
+
+bridges_usage() ->
+    ["\n  bridges list                              List bridges\n",
+     "  bridges start snode=<Node> topic=<Topic>    Start a bridge
+    options:
+      qos=<Qos>
+      topic_prefix=<Prefix>
+      topic_suffix=<Suffix>
+      queue=<Queue>\n",
+     "  bridges stop snode=<Node> topic=<Topic>     Stop a bridge\n"].
+
+vm_usage() ->
+    ["\n  vm info       Show info of Erlang VM\n",
+     "  vm load       Show load of Erlang VM\n",
+     "  vm memory     Show memory of Erlang VM\n",
+     "  vm process    Show process of Erlang VM\n",
+     "  vm io         Show IO of Erlang VM\n",
+     "  vm ports      Show Ports of Erlang VM\n"].
+
+trace_usage() ->
+    ["\n  trace list                                                                     List all traces\n",
+     "  trace type=client|topic client_id=<ClientId> topic=<Topic> log_file=<LogFile>  Start tracing\n",
+     "  trace off type=client|topic client_id=<ClientId> topic=<Topic>                 Stop tracing\n"].
+
+status_usage() ->
+    ["\n  status             Show broker status\n"].
+
+listeners_usage() ->
+    ["\n  listeners info     List listeners\n",
+     "  listeners start    Create and start a listener\n",
+     "  listeners stop     Stop accepting new connections for a running listener\n"].
+
+listener_start_usage() ->
+    ["\n  listeners start address=<IpAddr> port=<Port> type=<tcp|ssl|ws|wss|http|https>\n",
+     "  Create and start a listener.\n",
+     "Options:\n",
+     "  --acceptors=<integer>                   Size of acceptor pool\n",
+     "  --max_clients=<integer>                 Maximum number of concurrent clients\n",
+     "  --backlog=<integer>                     TCP Socket Options\n",
+     "  --buffer=<integer>                      TCP Socket Options\n",
+     "  --tls_versions=<tlsv1.2|tlsv1.1|tlsv1>  TLS protocol versions\n",
+     "  --handshake_timeout=<integer>           TLS handshake timeout(ms)\n",
+     "  --reuse_sessions=<true|false>           TLS allows clients to reuse pre-existing sessions\n",
+     "  --keyfile=<path>                        Path to the file containing the user's private PEM-encoded key\n",
+     "  --certfile=<path>                       Path to a file containing the user certificate\n",
+     "  --cacertfile=<path>                     Path to a file containing PEM-encoded CA certificates\n",
+     "  --dhfile=<path>                         Path to a file containing PEM-encoded Diffie Hellman\n",
+     "  --verify=<verify_none|verify_peer>      A server only does x509-path validation in mode\n",
+     "  --fail_if_no_peer_cert=<true|false>     Used together with {verify, verify_peer} by an SSL server\n"].
+
+listener_stop_usage() ->
+    ["\n  listeners stop address=<IpAddr> port=<Port> type=<tcp|ssl|ws|wss|http|https>\n",
+     "  Stops accepting new connections on a running listener.\n"].
+
+mnesia_usage() ->
+    ["\n  mnesia info   Mnesia system info\n"].
 
 %%--------------------------------------------------------------------
 %% Dump ETS
 %%--------------------------------------------------------------------
 
 dump(Table) ->
-    dump(Table, ets:first(Table)).
+    dump(Table, []).
 
-dump(_Table, '$end_of_table') ->
-    ok;
+dump(Table, Acc) ->
+    dump(Table, ets:first(Table), Acc).
 
-dump(Table, Key) ->
+dump(_Table, '$end_of_table', Acc) ->
+    lists:reverse(Acc);
+
+dump(Table, Key, Acc) ->
     case ets:lookup(Table, Key) of
-        [Record] -> print(Record);
-        [] -> ok
-    end,
-    dump(Table, ets:next(Table, Key)).
+        [Record] -> dump(Table, ets:next(Table, Key), [print(Record)|Acc]);
+        [] -> dump(Table, ets:next(Table, Key), Acc)
+    end.
 
 print([]) ->
-    ok;
+    [];
 
 print(Routes = [#mqtt_route{topic = Topic} | _]) ->
     Nodes = [atom_to_list(Node) || #mqtt_route{node = Node} <- Routes],
-    ?PRINT("~s -> ~s~n", [Topic, string:join(Nodes, ",")]);
-
-%% print(Subscriptions = [#mqtt_subscription{subid = ClientId} | _]) ->
-%%    TopicTable = [io_lib:format("~s:~w", [Topic, Qos])
-%%                  || #mqtt_subscription{topic = Topic, qos = Qos} <- Subscriptions],
-%%    ?PRINT("~s -> ~s~n", [ClientId, string:join(TopicTable, ",")]);
-
-%% print(Topics = [#mqtt_topic{}|_]) ->
-%%    foreach(fun print/1, Topics);
+    [{topic, Topic}, {routes, string:join(Nodes, ",")}];
 
 print(#mqtt_plugin{name = Name, version = Ver, descr = Descr, active = Active}) ->
-    ?PRINT("Plugin(~s, version=~s, description=~s, active=~s)~n",
-           [Name, Ver, Descr, Active]);
+    [{plugin, Name}, {version, Ver}, {description, Descr}, {active, Active}];
 
 print(#mqtt_client{client_id = ClientId, clean_sess = CleanSess, username = Username,
                    peername = Peername, connected_at = ConnectedAt}) ->
-    ?PRINT("Client(~s, clean_sess=~s, username=~s, peername=~s, connected_at=~p)~n",
-           [ClientId, CleanSess, Username, emqttd_net:format(Peername),
-            emqttd_time:now_secs(ConnectedAt)]);
+           [{client_id, ClientId}, 
+            {clean_sess, CleanSess}, 
+            {username, Username}, 
+            {ip, emqttd_net:format(Peername)}, 
+            {connected_at, emqttd_time:now_secs(ConnectedAt)}];
 
-%% print(#mqtt_topic{topic = Topic, flags = Flags}) ->
-%%    ?PRINT("~s: ~s~n", [Topic, string:join([atom_to_list(F) || F <- Flags], ",")]);
 print({route, Routes}) ->
-    foreach(fun print/1, Routes);
+    lists:map(fun print/1, Routes);
 print({local_route, Routes}) ->
-    foreach(fun print/1, Routes);
+    lists:map(fun print/1, Routes);
 print(#mqtt_route{topic = Topic, node = Node}) ->
-    ?PRINT("~s -> ~s~n", [Topic, Node]);
+    [{topic,  Topic}, {node, Node}];
 print({Topic, Node}) ->
-    ?PRINT("~s -> ~s~n", [Topic, Node]);
+    [{topic,  Topic}, {node, Node}];
 
 print({ClientId, _ClientPid, _Persistent, SessInfo}) ->
     Data = lists:append(SessInfo, emqttd_stats:get_session_stats(ClientId)),
@@ -548,25 +1163,19 @@ print({ClientId, _ClientPid, _Persistent, SessInfo}) ->
                 deliver_msg,
                 enqueue_msg,
                 created_at],
-    ?PRINT("Session(~s, clean_sess=~s, subscriptions=~w, max_inflight=~w, inflight=~w, "
-           "mqueue_len=~w, mqueue_dropped=~w, awaiting_rel=~w, "
-           "deliver_msg=~w, enqueue_msg=~w, created_at=~w)~n",
-            [ClientId | [format(Key, get_value(Key, Data)) || Key <- InfoKeys]]).
+            [{client_id, ClientId} | [{Key, format(Key, get_value(Key, Data))} || Key <- InfoKeys]].
 
 print(subscription, {Sub, {_Share, Topic}}) when is_pid(Sub) ->
-    ?PRINT("~p -> ~s~n", [Sub, Topic]);
+    [{subscription, Sub}, {topic, Topic}];
 print(subscription, {Sub, Topic}) when is_pid(Sub) ->
-    ?PRINT("~p -> ~s~n", [Sub, Topic]);
+    [{subscription, Sub}, {topic, Topic}];
 print(subscription, {Sub, {_Share, Topic}}) ->
-    ?PRINT("~s -> ~s~n", [Sub, Topic]);
+    [{subscription, Sub}, {topic, Topic}];
 print(subscription, {Sub, Topic}) ->
-    ?PRINT("~s -> ~s~n", [Sub, Topic]).
+    [{subscription, Sub}, {topic, Topic}].
 
 format(created_at, Val) ->
     emqttd_time:now_secs(Val);
 
 format(_, Val) ->
     Val.
-
-bin(S) -> iolist_to_binary(S).
-
