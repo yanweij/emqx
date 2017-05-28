@@ -1,28 +1,162 @@
 %%-*- mode: erlang -*-
-%% EMQ config mapping
+%% EMQ R2.2 config mapping
 
 %%--------------------------------------------------------------------
 %% Cluster
 %%--------------------------------------------------------------------
 
-%% Cluster ID
-{mapping, "cluster.id", "emqttd.cluster", [
-  {default, "emq"},
+%% @doc Cluster name
+{mapping, "cluster.name", "emqttd.cluster_name", [
+  {default, emqcl},
+  {datatype, atom}
+]}.
+
+%% @doc Secret cookie for the cluster
+{mapping, "cluster.cookie", "vm_args.-setcookie", [
+  {default, "emqclustercookie"}
+]}.
+
+%% @doc Cluster strategy
+{mapping, "cluster.strategy", "emqttd.cluster_strategy", [
+  {default, manual},
+  {datatype, atom}
+]}.
+
+%% @doc Clean down node from the cluster
+{mapping, "cluster.clean_down", "emqttd.cluster_clean_down", [
+  {datatype, {duration, ms}},
+  {default, "1h"}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster with epmd
+
+{mapping, "cluster.epmd.seeds", "emqttd.cluster_strategy", [
   {datatype, string}
 ]}.
 
-%% Cluster Multicast Addr
-{mapping, "cluster.multicast", "emqttd.cluster", [
-  {default, "239.192.0.1:44369"},
+%%--------------------------------------------------------------------
+%% Cluster with IP Multicast
+
+{mapping, "cluster.mcast.addr", "emqttd.cluster_strategy", [
+  {datatype, ip}
+]}.
+
+{mapping, "cluster.mcast.period", "emqttd.cluster_strategy", [
+  {datatype, {duration, ms}},
+  {default, "1s"}
+]}.
+
+{mapping, "cluster.mcast.iface", "emqttd.cluster_strategy", [
+  {datatype, string},
+  {default, "0.0.0.0"}
+]}.
+
+{mapping, "cluster.mcast.ttl", "emqttd.cluster_strategy", [
+  {datatype, integer},
+  {default, 1}
+]}.
+
+{mapping, "cluster.mcast.loop", "emqttd.cluster_strategy", [
+  {datatype, flag},
+  {default, on}
+]}.
+
+{mapping, "cluster.mcast.sndbuf", "emqttd.cluster_strategy", [
+  {datatype, bytesize},
+  {default, "16KB"}
+]}.
+
+{mapping, "cluster.mcast.recbuf", "emqttd.cluster_strategy", [
+  {datatype, bytesize},
+  {default, "16KB"}
+]}.
+
+{mapping, "cluster.mcast.buffer", "emqttd.cluster_strategy", [
+  {datatype, bytesize},
+  {default, "32KB"}
+]}.
+
+{mapping, "cluster.gossip.seeds", "emqttd.cluster_strategy", [
   {datatype, string}
 ]}.
 
-{translation, "emqttd.cluster", fun(Conf) ->
-    Multicast = cuttlefish:conf_get("cluster.multicast", Conf),
-    [Addr, Port] = string:tokens(Multicast, ":"),
-    {ok, Ip} = inet_parse:address(Addr),
-    [{id, cuttlefish:conf_get("cluster.id", Conf)},
-     {multicast, {Ip, list_to_integer(Port)}}]
+{mapping, "cluster.gossip.protocol_period", "emqttd.cluster_strategy", [
+  {datatype, {duration, ms}},
+  {default, "1s"}
+]}.
+
+{mapping, "cluster.gossip.suspicion_factor", "emqttd.cluster_strategy", [
+  {datatype, integer},
+  {default, 3}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster with Etcd
+
+{mapping, "cluster.etcd.addr", "emqttd.cluster_strategy", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.etcd.prefix", "emqttd.cluster_strategy", [
+  {datatype, string}
+]}.
+
+{mapping, "cluster.etcd.node_ttl", "emqttd.cluster_strategy", [
+  {datatype, {duration, ms}},
+  {default, "1m"}
+]}.
+
+%%--------------------------------------------------------------------
+%% Cluster with Consul
+
+{mapping, "cluster.consul.addr", "emqttd.cluster_strategy", [
+  {datatype, ip}
+]}.
+
+{mapping, "cluster.consul.acl_token", "emqttd.cluster_strategy", [
+  {datatype, string}
+]}.
+
+{translation, "emqttd.cluster_strategy", fun(Conf) ->
+  Strategy = cuttlefish:conf_get("cluster.strategy", Conf),
+  Filter  = fun(Opts) -> [{K, V} || {K, V} <- Opts, V =/= undefined] end,
+  IpPort = fun(S) ->
+             [Addr, Port] = string:tokens(S, ":"),
+             {ok, Ip} = inet:parse_address(Addr),
+             {Ip, Port}
+           end,
+  Options = fun(epmd) ->
+                 [{seeds, cuttlefish:conf_get("cluster.epmd.seeds", Conf)}];
+               (mcast) ->
+                 {Addr, Port} = cuttlefish:conf_get("cluster.mcast.addr", Conf),
+                 {ok, Ip} = inet:parse_address(Addr),
+                 {ok, Iface} = inet:parse_address(cuttlefish:conf_get("cluster.mcast.iface", Conf)),
+                 [{addr, Ip}, {port, Port}, {iface, Iface},
+                  {period, cuttlefish:conf_get("cluster.mcast.period", Conf)},
+                  {ttl, cuttlefish:conf_get("cluster.mcast.ttl", Conf, 1)},
+                  {loop, cuttlefish:conf_get("cluster.mcast.loop", Conf, true)}];
+               (etcd) ->
+                 [{seeds, cuttlefish:conf_get("cluster.epmd.seeds", Conf)},
+                  {clean_down, cuttlefish:conf_get("cluster.epmd.clean_down", Conf, undefined)}];
+               (gossip) ->
+                 [{seeds, [IpPort(S) || S <- string:tokens(",", cuttlefish:conf_get("cluster.gossip.seeds", Conf))]},
+                  {protocol_period, cuttlefish:conf_get("cluster.gossip.protocol_period", Conf)},
+                  {suspicion_factor, cuttlefish:conf_get("cluster.gossip.suspicion_factor", Conf, 3)}];
+               (etcd) ->
+                 [{addr, cuttlefish:conf_get("cluster.etcd.addr", Conf)},
+                  {prefix, cuttlefish:conf_get("cluster.etcd.prefix", Conf, "emq")},
+                  {node_ttl, cuttlefish:conf_get("cluster.etcd.node_ttl", Conf, 60)}];
+               (consul) ->
+                 [{addr, cuttlefish:conf_get("cluster.consul.addr", Conf)},
+                  {acl_token, cuttlefish:conf_get("cluster.consul.acl_token", Conf)}];
+               (k8s) ->
+                 [{host, cuttlefish:conf_get("cluster.k8s.selector", Conf)},
+                  {acl_token, cuttlefish:conf_get("cluster.k8s.node_basename", Conf)}];
+               (manual) ->
+                 [ ]
+            end,
+  {Strategy, Filter(Options(Strategy))}
 end}.
 
 %%--------------------------------------------------------------------
