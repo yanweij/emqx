@@ -15,6 +15,13 @@
 %%--------------------------------------------------------------------
 
 %% @doc Hot Configuration
+%%
+%% TODO: How to persist the configuration?
+%% 
+%% 1. Store in mnesia database?
+%% 2. Store in dets?
+%% 3. Store in data/app.config?
+%%
 
 -module(emqttd_config).
 
@@ -25,7 +32,7 @@
 %% @doc Read the configuration of an application.
 -spec(read(atom()) -> {ok, list(env())} | {error, term()}).
 read(_App) ->
-    %% TODO
+    %% TODO: 
     %% 1. Read the app.conf from etc folder
     %% 2. Cuttlefish to read the conf
     %% 3. Return the terms and schema
@@ -45,15 +52,21 @@ dump(_App, _Terms) ->
     %% TODO
     ok.
 
--spec(set(atom(), atom(), term()) -> ok).
+-spec(set(atom(), list(), list()) -> ok).
 set(App, Par, Val) ->
-    application:set_env(App, Par, Val).
+    emqttd_cli_config:run(["config",
+                            "set",
+                            lists:concat([Par, "=", Val]),
+                            lists:concat(["--app=", App])]).
 
--spec(get(atom(), atom()) -> undefined | {ok, term()}).
+-spec(get(atom(), list()) -> undefined | {ok, term()}).
 get(App, Par) ->
-    application:get_env(App, Par).
+    case emqttd_cli_config:get_cfg(App, Par) of
+        undefined -> undefined;
+        Val -> {ok, Val}
+    end.
 
--spec(get(atom(), atom(), atom()) -> term()).
+-spec(get(atom(), list(), atom()) -> term()).
 get(App, Par, Def) ->
-    application:get_env(App, Par, Def).
+    emqttd_cli_config:get_cfg(App, Par, Def).
 
