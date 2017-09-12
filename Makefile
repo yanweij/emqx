@@ -13,7 +13,7 @@ dep_ekka         = git https://github.com/emqtt/ekka master
 dep_mochiweb     = git https://github.com/emqtt/mochiweb master
 dep_pbkdf2       = git https://github.com/emqtt/pbkdf2 2.0.1
 dep_clique       = git https://github.com/emqtt/clique
-dep_jsx           = git https://github.com/talentdeficit/jsx
+dep_jsx          = git https://github.com/talentdeficit/jsx
 
 ERLC_OPTS += +debug_info
 ERLC_OPTS += +'{parse_transform, lager_transform}'
