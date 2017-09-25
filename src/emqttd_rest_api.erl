@@ -13,13 +13,14 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 %%--------------------------------------------------------------------
+
 -module (emqttd_rest_api).
 
 -include("emqttd.hrl").
 
 -include("emqttd_internal.hrl").
 
--http_api({"^nodes/(.+?)/alarms/?$", 'GET', alarm_list, []}).
+-http_api({"^nodes/(.+?)/alarms/?$", 'GET', "/alarms", alarm_list, []}).
 
 -http_api({"^nodes/(.+?)/clients/?$", 'GET', client_list, []}).
 -http_api({"^nodes/(.+?)/clients/(.+?)/?$", 'GET',client_list, []}).
