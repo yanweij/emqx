@@ -14,67 +14,66 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module (emqttd_rest_api).
+-module(emqttd_rest).
 
 -include("emqttd.hrl").
 
 -include("emqttd_internal.hrl").
 
--http_api({"^nodes/(.+?)/alarms/?$", 'GET', "/alarms", alarm_list, []}).
+%% Get alarms.
+-http_api({'GET', "alarms", "^nodes/(.+?)/alarms/?$", alarm_list, []}).
+-http_api({'GET', "nodes/<node>/clients/", "^nodes/(.+?)/clients/?$", client_list, []}).
+-http_api({'GET', "nodes/<node>/clients/<clientId>", "^nodes/(.+?)/clients/(.+?)/?$", client_list, []}).
 
--http_api({"^nodes/(.+?)/clients/?$", 'GET', client_list, []}).
--http_api({"^nodes/(.+?)/clients/(.+?)/?$", 'GET',client_list, []}).
--http_api({"^clients/(.+?)/?$", 'GET', client, []}).
--http_api({"^clients/(.+?)/?$", 'DELETE', kick_client, []}).
--http_api({"^clients/(.+?)/clean_acl_cache?$", 'PUT', clean_acl_cache, [{<<"topic">>, binary}]}).
+-http_api({'GET', "clients/<clientId>", "^clients/(.+?)/?$", client, []}).
+-http_api({'DELETE', "clients/<clientId>", "^clients/(.+?)/?$", kick_client, []}).
+-http_api({'PUT', "clients/<clientId>/clean_acl_cache", "^clients/(.+?)/clean_acl_cache?$", clean_acl_cache, [{<<"topic">>, binary}]}).
 
--http_api({"^routes?$", 'GET', route_list, []}).
--http_api({"^routes/(.+?)/?$", 'GET', route, []}).
+-http_api({'GET', "routes", "^routes?$", route_list, []}).
+-http_api({'GET', "routes/<Topic>", "^routes/(.+?)/?$", route, []}).
 
--http_api({"^nodes/(.+?)/sessions/?$", 'GET', session_list, []}).
--http_api({"^nodes/(.+?)/sessions/(.+?)/?$", 'GET', session_list, []}).
--http_api({"^sessions/(.+?)/?$", 'GET', session, []}).
+-http_api({'GET', "nodes/<node>/sessions", "^nodes/(.+?)/sessions/?$", session_list, []}).
+-http_api({'GET', "nodes/<node>/sessions/<clientId>", "^nodes/(.+?)/sessions/(.+?)/?$", session_list, []}).
+-http_api({'GET', "sessions/<clientId>", "^sessions/(.+?)/?$", session, []}).
 
--http_api({"^nodes/(.+?)/subscriptions/?$", 'GET', subscription_list, []}).
--http_api({"^nodes/(.+?)/subscriptions/(.+?)/?$", 'GET', subscription_list, []}).
--http_api({"^subscriptions/(.+?)/?$", 'GET', subscription, []}).
+-http_api({'GET', "nodes/<node>/subscriptions", "^nodes/(.+?)/subscriptions/?$", subscription_list, []}).
+-http_api({'GET', "nodes/<node>/subscriptions/<clientId>", "^nodes/(.+?)/subscriptions/(.+?)/?$", subscription_list, []}).
+-http_api({'GET', "subscriptions/<clientId>", "^subscriptions/(.+?)/?$", subscription, []}).
 
--http_api({"^mqtt/publish?$", 'POST', publish, [{<<"topic">>, binary}]}).
--http_api({"^mqtt/subscribe?$", 'POST', subscribe, [{<<"client_id">>, binary},{<<"topic">>, binary}]}).
--http_api({"^mqtt/unsubscribe?$", 'POST', unsubscribe, [{<<"client_id">>, binary},{<<"topic">>, binary}]}).
+-http_api({'POST', "mqtt/publish", "^mqtt/publish?$", publish, [{<<"topic">>, binary}]}).
+-http_api({'POST', "mqtt/subscribe", "^mqtt/subscribe?$", subscribe, [{<<"client_id">>, binary},{<<"topic">>, binary}]}).
+-http_api({'POST', "mqtt/unsubscribe", "^mqtt/unsubscribe?$", unsubscribe, [{<<"client_id">>, binary},{<<"topic">>, binary}]}).
 
--http_api({"^management/nodes/?$", 'GET', brokers, []}).
--http_api({"^management/nodes/(.+?)/?$", 'GET', broker, []}).
--http_api({"^monitoring/nodes/?$", 'GET', nodes, []}).
--http_api({"^monitoring/nodes/(.+?)/?$", 'GET', node, []}).
--http_api({"^monitoring/listeners/?$", 'GET', listeners, []}).
--http_api({"^monitoring/listeners/(.+?)/?$", 'GET', listener, []}).
--http_api({"^monitoring/metrics/?$", 'GET', metrics, []}).
--http_api({"^monitoring/metrics/(.+?)/?$", 'GET', metric, []}).
--http_api({"^monitoring/stats/?$", 'GET', stats, []}).
--http_api({"^monitoring/stats/(.+?)/?$", 'GET', stat, []}).
+-http_api({'GET', "management/nodes/", "^management/nodes/?$", brokers, []}).
+-http_api({'GET', "management/nodes/<node>", "^management/nodes/(.+?)/?$", broker, []}).
 
--http_api({"^nodes/(.+?)/plugins/?$", 'GET', plugin_list, []}).
--http_api({"^nodes/(.+?)/plugins/(.+?)/?$", 'PUT', enabled, [{<<"active">>, bool}]}).
+-http_api({'GET', "monitoring/nodes/", "^monitoring/nodes/?$", nodes, []}).
+-http_api({'GET', "monitoring/nodes/<node>", "^monitoring/nodes/(.+?)/?$", node, []}).
+-http_api({'GET', "monitoring/listeners/", "^monitoring/listeners/?$", listeners, []}).
+-http_api({'GET', "monitoring/listeners/<node>", "^monitoring/listeners/(.+?)/?$", listener, []}).
+-http_api({'GET', "monitoring/metrics/", "^monitoring/metrics/?$", metrics, []}).
+-http_api({'GET', "monitoring/metrics/<node>", "^monitoring/metrics/(.+?)/?$", metrics, []}).
+-http_api({'GET', "monitoring/stats/", "^monitoring/stats/?$", "monitoring/stats/", stats, []}).
+-http_api({'GET', "monitoring/stats/<node>", "^monitoring/stats/(.+?)/?$", stats, []}).
 
--http_api({"^configs/(.+?)/?$", 'PUT', modify_config, [{<<"key">>, binary}, {<<"value">>, binary}]}).
--http_api({"^configs/?$", 'GET', config_list, []}).
--http_api({"^nodes/(.+?)/configs/(.+?)/?$", 'PUT', modify_config, [{<<"key">>, binary}, {<<"value">>, binary}]}).
--http_api({"^nodes/(.+?)/configs/?$", 'GET', config_list, []}).
--http_api({"^nodes/(.+?)/plugin_configs/(.+?)/?$", 'GET', plugin_config_list, []}).
--http_api({"^nodes/(.+?)/plugin_configs/(.+?)/?$", 'PUT', modify_plugin_config, []}).
+-http_api({'GET', "nodes/<node>/plugins/", "^nodes/(.+?)/plugins/?$", plugin_list, []}).
+-http_api({'PUT', "nodes/<node>/plugins/<plugin>", "^nodes/(.+?)/plugins/(.+?)/?$", enabled, [{<<"active">>, bool}]}).
 
--http_api({"^users/?$", 'GET', users, []}).
--http_api({"^users/?$", 'POST', users, [{<<"username">>, binary},
-                                        {<<"password">>, binary},
-                                        {<<"tag">>, binary}]}).
--http_api({"^users/(.+?)/?$", 'GET', users, []}).
--http_api({"^users/(.+?)/?$", 'PUT', users, []}).
--http_api({"^users/(.+?)/?$", 'DELETE', users, []}).
+-http_api({'PUT', "configs/<app>", "^configs/(.+?)/?$", modify_config, [{<<"key">>, binary}, {<<"value">>, binary}]}).
+-http_api({'GET', "configs/", "^configs/?$", config_list, []}).
+-http_api({'PUT', "nodes/<node>/configs/<app>", "^nodes/(.+?)/configs/(.+?)/?$", modify_config, [{<<"key">>, binary}, {<<"value">>, binary}]}).
+-http_api({'GET', "nodes/<node>/configs/", "^nodes/(.+?)/configs/?$", config_list, []}).
+-http_api({'GET', "nodes/<node>/plugin_configs/<plugin>/", "^nodes/(.+?)/plugin_configs/(.+?)/?$", plugin_config_list, []}).
+-http_api({'PUT', "nodes/<node>/plugins_configs/<plugin>", "^nodes/(.+?)/plugin_configs/(.+?)/?$", modify_plugin_config, []}).
 
--http_api({"^auth/?$", 'POST', auth, [{<<"username">>, binary}, {<<"password">>, binary}]}).
--http_api({"^change_pwd/(.+?)/?$", 'PUT', change_pwd, [{<<"old_pwd">>, binary},
-                                                       {<<"new_pwd">>, binary}]}).
+-http_api({'GET', "users/", "^users/?$", users, []}).
+-http_api({'POST', "users/", "^users/?$", users, [{<<"username">>, binary}, {<<"password">>, binary}, {<<"tag">>, binary}]}).
+-http_api({'GET', "users/<username>", "^users/(.+?)/?$", users, []}).
+-http_api({'PUT', "users/<username>", "^users/(.+?)/?$", users, []}).
+-http_api({'DELETE', "users/<username>", "^users/(.+?)/?$", users, []}).
+
+-http_api({'POST', "auth/", "^auth/?$", auth, [{<<"username">>, binary}, {<<"password">>, binary}]}).
+-http_api({'PUT', "change_pwd/<username>", "^change_pwd/(.+?)/?$", change_pwd, [{<<"old_pwd">>, binary}, {<<"new_pwd">>, binary}]}).
 
 -import(proplists, [get_value/2, get_value/3]).
 
@@ -83,7 +82,7 @@
 -export([route/3, route_list/2]).
 -export([session/3, session_list/3, session_list/4]).
 -export([subscription/3, subscription_list/3, subscription_list/4]).
--export([nodes/2, node/3, brokers/2, broker/3, listeners/2, listener/3, metrics/2, metric/3, stats/2, stat/3]).
+-export([nodes/2, node/3, brokers/2, broker/3, listeners/2, listener/3, metrics/2, metrics/3, stats/2, stats/3]).
 -export([publish/2, subscribe/2, unsubscribe/2]).
 -export([plugin_list/3, enabled/4]).
 -export([modify_config/3, modify_config/4, config_list/2, config_list/3,
@@ -278,17 +277,15 @@ metrics('GET', _Params) ->
     Data = emqttd_mgmt:metrics(),
     {ok, [Data]}.
 
-metric('GET', _Params, Node) ->
+metrics('GET', _Params, Node) ->
     Data = emqttd_mgmt:metrics(l2a(Node)),
     {ok, Data}.
 
 stats('GET', _Params) ->
-    Data = emqttd_mgmt:stats(),
-    {ok, [Data]}.
+    {ok, [emqttd_mgmt:stats()]}.
 
-stat('GET', _Params, Node) ->
-    Data = emqttd_mgmt:stats(l2a(Node)),
-    {ok, Data}.
+stats('GET', _Params, Node) ->
+    {ok, emqttd_mgmt:stats(l2a(Node))}.
 
 format_broker(Node, Broker) ->
     OtpRel  = "R" ++ erlang:system_info(otp_release) ++ "/" ++ erlang:system_info(version),

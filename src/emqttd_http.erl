@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
-%% @doc HTTP publish API and websocket client.
+%% @doc HTTP publish API and Websocket client.
 
 -module(emqttd_http).
 
@@ -24,68 +24,56 @@
 
 -include("emqttd_protocol.hrl").
 
--import(proplists, [get_value/2, get_value/3]).
-
--export([http_handler/0, handle_request/2, http_api/0, inner_handle_request/2]).
-
 -include("emqttd_internal.hrl").
 
--record(state, {dispatch}).
+-import(proplists, [get_value/2, get_value/3]).
 
-http_handler() ->
-    APIs = http_api(),
-    State = #state{dispatch = dispatcher(APIs)},
-    {?MODULE, handle_request, [State]}.
+-export([handler/0, dispatcher/0, api_list/0, handle_request/2]).
 
-http_api() ->
-    Attr = emqttd_rest_api:module_info(attributes),
-    [{Regexp, Method, Function, Args} || {http_api, [{Regexp, Method, Function, Args}]} <- Attr].
+%%--------------------------------------------------------------------
+%% Handler and Dispatcher
+%%--------------------------------------------------------------------
+
+handler() ->
+    {?MODULE, handle_request, [dispatcher()]}.
+
+dispatcher() ->
+    dispatcher(api_list()).
+
+api_list() ->
+    [#{method => Method, path => Path, reg => Reg, function => Fun, args => Args}
+      || {http_api, [{Method, Path, Reg, Fun, Args}]} <- emqttd_rest:module_info(attributes)].
 
 %%--------------------------------------------------------------------
 %% Handle HTTP Request
 %%--------------------------------------------------------------------
-handle_request(Req, State) ->
-    Path = Req:get(path),
-    case Path of
-        "/status" ->
-            handle_request("/status", Req, Req:get(method));
-        "/" ->
-            handle_request("/", Req, Req:get(method));
-        "/api/v2/auth" ->
-            handle_request(Path, Req, State);
+
+handle_request(Req, Dispatch) ->
+    Method = Req:get(method),
+    case Req:get(path) of
+        "/status" when Method =:= 'HEAD'; Method =:= 'GET' ->
+            {InternalStatus, _ProvidedStatus} = init:get_status(),
+            AppStatus = case lists:keysearch(emqttd, 1, application:which_applications()) of
+                false         -> not_running;
+                {value, _Val} -> running
+            end,
+            Status = io_lib:format("Node ~s is ~s~nemqttd is ~s",
+                                    [node(), InternalStatus, AppStatus]),
+            Req:ok({"text/plain", iolist_to_binary(Status)});
+        "/" when Method =:= 'HEAD'; Method =:= 'GET' ->
+            respond(Req, 200, [ [{method, M}, {path, iolist_to_binary(["api/v2/", P])}]
+                                || #{method := M, path := P} <- api_list() ]);
+        "/api/v2/" ++ Url ->
+            if_authorized(Req, fun() -> Dispatch(Method, Url, Req) end);
         _ ->
-            if_authorized(Req, fun() -> handle_request(Path, Req, State) end)
+            respond(Req, 404, [])
     end.
 
-inner_handle_request(Req, State) ->
-    Path = Req:get(path),
-    handle_request(Path, Req, State).
-
-
-handle_request("/api/v2/" ++ Url, Req, #state{dispatch = Dispatch}) ->
-    Dispatch(Req, Url);
-
-handle_request("/status", Req, Method) when Method =:= 'HEAD'; Method =:= 'GET' ->
-    {InternalStatus, _ProvidedStatus} = init:get_status(),
-    AppStatus = case lists:keysearch(emqttd, 1, application:which_applications()) of
-        false         -> not_running;
-        {value, _Val} -> running
-    end,
-    Status = io_lib:format("Node ~s is ~s~nemqttd is ~s",
-                            [node(), InternalStatus, AppStatus]),
-    Req:ok({"text/plain", iolist_to_binary(Status)});
-
-handle_request("/", Req, Method) when Method =:= 'HEAD'; Method =:= 'GET' ->
-    respond(Req, 200, api_list());
-
-handle_request(_, Req, #state{}) ->
-    respond(Req, 404, []).
-
 dispatcher(APIs) ->
-    fun(Req, Url) ->
-        Method = Req:get(method),
-        case filter(APIs, Url, Method) of
-            [{Regexp, _Method, Function, FilterArgs}] ->
+    fun(Method, Url, Req) ->
+        io:format("~s ~s: ~p~n", [Method, Url, Req]),
+        case filter(Url, Method, APIs) of
+            [#{reg := Regexp, function := Function, args := FilterArgs}] ->
                 case params(Req) of
                     {error, Error1} ->
                         respond(Req, 200, Error1);
@@ -95,8 +83,8 @@ dispatcher(APIs) ->
                             {true, true} ->
                                 {match, [MatchList]} = re:run(Url, Regexp, [global, {capture, all_but_first, list}]),
                                 Args = lists:append([[Method, Params], MatchList]),
-                                lager:debug("Mod:~p, Fun:~p, Args:~p", [emqttd_rest_api, Function, Args]),
-                                case catch apply(emqttd_rest_api, Function, Args) of
+                                lager:debug("Mod:~p, Fun:~p, Args:~p", [emqttd_rest, Function, Args]),
+                                case catch apply(emqttd_rest, Function, Args) of
                                     {ok, Data} ->
                                         respond(Req, 200, [{code, ?SUCCESS}, {result, Data}]);
                                     {error, Error} ->
@@ -117,9 +105,10 @@ dispatcher(APIs) ->
         end
     end.
 
-% %%--------------------------------------------------------------------
-% %% Basic Authorization
-% %%--------------------------------------------------------------------
+%%--------------------------------------------------------------------
+%% Basic Authorization
+%%--------------------------------------------------------------------
+
 if_authorized(Req, Fun) ->
     case authorized(Req) of
         true  -> Fun();
@@ -153,8 +142,8 @@ respond(Req, 200, Data) ->
 respond(Req, Code, Data) ->
     Req:respond({Code, [{"Content-Type", "text/plain"}], Data}).
 
-filter(APIs, Url, Method) ->
-    lists:filter(fun({Regexp, Method1, _Function, _Args}) ->
+filter(Url, Method, APIs) ->
+    lists:filter(fun(#{reg := Regexp, method := Method1}) ->
         case re:run(Url, Regexp, [global, {capture, all_but_first, list}]) of
             {match, _} -> Method =:= Method1;
             _ -> false
@@ -200,33 +189,3 @@ check_params_type(Params, Args) ->
 to_json([])   -> <<"[]">>;
 to_json(Data) -> iolist_to_binary(mochijson2:encode(Data)).
 
-api_list() ->
-    [{paths, [<<"api/v2/management/nodes">>,
-              <<"api/v2/management/nodes/{node_name}">>,
-              <<"api/v2/monitoring/nodes">>,
-              <<"api/v2/monitoring/nodes/{node_name}">>,
-              <<"api/v2/monitoring/listeners">>,
-              <<"api/v2/monitoring/listeners/{node_name}">>,
-              <<"api/v2/monitoring/metrics/">>,
-              <<"api/v2/monitoring/metrics/{node_name}">>,
-              <<"api/v2/monitoring/stats">>,
-              <<"api/v2/monitoring/stats/{node_name}">>,
-              <<"api/v2/nodes/{node_name}/clients">>,
-              <<"api/v2/nodes/{node_name}/clients/{clientid}">>,
-              <<"api/v2/clients/{clientid}">>,
-              <<"api/v2/clients/{clientid}/clean_acl_cache">>,
-              <<"api/v2/nodes/{node_name}/sessions">>,
-              <<"api/v2/nodes/{node_name}/sessions/{clientid}">>,
-              <<"api/v2/sessions/{clientid}">>,
-              <<"api/v2/nodes/{node_name}/subscriptions">>,
-              <<"api/v2/nodes/{node_name}/subscriptions/{clientid}">>,
-              <<"api/v2/subscriptions/{clientid}">>,
-              <<"api/v2/routes">>,
-              <<"api/v2/routes/{topic}">>,
-              <<"api/v2/mqtt/publish">>,
-              <<"api/v2/mqtt/subscribe">>,
-              <<"api/v2/mqtt/unsubscribe">>,
-              <<"api/v2/nodes/{node_name}/plugins">>,
-              <<"api/v2/nodes/{node_name}/plugins/{plugin_name}">>,
-              <<"api/v2/configs/{app}">>,
-              <<"api/v2/nodes/{node_name}/configs/{app}">>]}].
