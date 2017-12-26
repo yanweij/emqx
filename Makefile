@@ -1,6 +1,6 @@
 PROJECT = emqttd
 PROJECT_DESCRIPTION = Erlang MQTT Broker
-PROJECT_VERSION = 2.3.1
+PROJECT_VERSION = 2.3.2
 
 DEPS = goldrush gproc lager esockd ekka mochiweb pbkdf2 clique jsx
 
@@ -8,9 +8,9 @@ dep_goldrush     = git https://github.com/basho/goldrush 0.1.9
 dep_gproc        = git https://github.com/uwiger/gproc
 dep_getopt       = git https://github.com/jcomellas/getopt v0.8.2
 dep_lager        = git https://github.com/basho/lager master
-dep_esockd       = git https://github.com/emqtt/esockd master
+dep_esockd       = git https://github.com/emqtt/esockd v5.2
 dep_ekka         = git https://github.com/emqtt/ekka master
-dep_mochiweb     = git https://github.com/emqtt/mochiweb master
+dep_mochiweb     = git https://github.com/emqtt/mochiweb v4.2.0
 dep_pbkdf2       = git https://github.com/emqtt/pbkdf2 2.0.1
 dep_clique       = git https://github.com/emqtt/clique
 dep_jsx          = git https://github.com/talentdeficit/jsx
@@ -25,7 +25,7 @@ dep_cuttlefish = git https://github.com/emqtt/cuttlefish
 
 TEST_DEPS = emqttc emq_dashboard
 dep_emqttc = git https://github.com/emqtt/emqttc
-dep_emq_dashboard = git https://github.com/emqtt/emq_dashboard
+dep_emq_dashboard = git https://github.com/emqtt/emq_dashboard develop
 
 TEST_ERLC_OPTS += +debug_info
 TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
