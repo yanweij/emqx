@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
 -include("emqttd.hrl").
 
 %% API
--export([start_link/0, start_child/1, start_child/2]).
+-export([start_link/0, start_child/1, start_child/2, stop_child/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -39,12 +39,15 @@ start_link() ->
 start_child(ChildSpec) when is_tuple(ChildSpec) ->
     supervisor:start_child(?MODULE, ChildSpec).
 
-%%
-%% start_child(Mod::atom(), Type::type()) -> {ok, pid()}
-%% @type type() = worker | supervisor
-%%
-start_child(Mod, Type) when is_atom(Mod) and is_atom(Type) ->
+start_child(Mod, Type) when is_atom(Mod) andalso is_atom(Type) ->
     supervisor:start_child(?MODULE, ?CHILD(Mod, Type)).
+
+-spec(stop_child(any()) -> ok | {error, term()}).
+stop_child(ChildId) ->
+    case supervisor:terminate_child(?MODULE, ChildId) of
+        ok    -> supervisor:delete_child(?MODULE, ChildId);
+        Error -> Error
+    end.
 
 %%--------------------------------------------------------------------
 %% Supervisor callbacks

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 %% @doc VM System Monitor
 -module(emqttd_sysmon).
+
+-author("Feng Lee <feng@emqtt.io>").
 
 -behavior(gen_server).
 
@@ -162,10 +164,10 @@ publish(Sysmon, WarnMsg) ->
 topic(Sysmon) ->
     emqttd_topic:systop(list_to_binary(lists:concat(['sysmon/', Sysmon]))).
 
-start_tracelog(undefined) ->
-    {ok, undefined};
-start_tracelog(LogFile) ->
-    lager:trace_file(LogFile, [{sysmon, true}], info, ?LOG_FMT).
+%% start_tracelog(undefined) ->
+%%    {ok, undefined};
+%% start_tracelog(LogFile) ->
+%%    lager:trace_file(LogFile, [{sysmon, true}], info, ?LOG_FMT).
 
 cancel_tracelog(undefined) ->
     ok;

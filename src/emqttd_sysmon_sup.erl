@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,8 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    Sysmon = {sysmon, {emqttd_sysmon, start_link, [emqttd:env(sysmon)]},
-                permanent, 5000, worker, [emqttd_sysmon]} ,
+	{ok, Env} = emqttd:env(sysmon),
+    Sysmon = {sysmon, {emqttd_sysmon, start_link, [Env]},
+                permanent, 5000, worker, [emqttd_sysmon]},
     {ok, {{one_for_one, 10, 100}, [Sysmon]}}.
 

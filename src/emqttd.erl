@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,38 +14,63 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
+%% @doc EMQ Main Module.
+
 -module(emqttd).
+
+-author("Feng Lee <feng@emqtt.io>").
 
 -include("emqttd.hrl").
 
 -include("emqttd_protocol.hrl").
 
--export([start/0, env/1, env/2, is_running/1]).
+-export([start/0, env/1, env/2, is_running/1, stop/0]).
 
 %% PubSub API
--export([create/2, lookup/2, publish/1, subscribe/1, subscribe/3,
-         unsubscribe/1, unsubscribe/3]).
+-export([subscribe/1, subscribe/2, subscribe/3, publish/1,
+         unsubscribe/1, unsubscribe/2]).
+
+%% PubSub Management API
+-export([setqos/3, topics/0, subscriptions/1, subscribers/1, subscribed/2]).
 
 %% Hooks API
--export([hook/4, hook/3, unhook/2, run_hooks/3]).
+-export([hook/4, hook/3, unhook/2, run_hooks/2, run_hooks/3]).
+
+%% Debug API
+-export([dump/0]).
+
+%% Shutdown and reboot
+-export([shutdown/0, shutdown/1, reboot/0]).
+
+-type(subid() :: binary()).
+
+-type(subscriber() :: pid() | subid() | {subid(), pid()}).
+
+-type(suboption() :: local | {qos, non_neg_integer()} | {share, {'$queue' | binary()}}).
+
+-export_type([subscriber/0, suboption/0]).
 
 -define(APP, ?MODULE).
 
 %%--------------------------------------------------------------------
-%% Bootstrap, environment, is_running...
+%% Bootstrap, environment, configuration, is_running...
 %%--------------------------------------------------------------------
 
 %% @doc Start emqttd application.
--spec(start() -> ok | {error, any()}).
+-spec(start() -> ok | {error, term()}).
 start() -> application:start(?APP).
 
-%% @doc Group environment
--spec(env(Group :: atom()) -> list()).
-env(Group) -> application:get_env(?APP, Group, []).
+%% @doc Stop emqttd application.
+-spec(stop() -> ok | {error, term()}).
+stop() -> application:stop(?APP).
+
+%% @doc Environment
+-spec(env(Key :: atom()) -> {ok, any()} | undefined).
+env(Key) -> application:get_env(?APP, Key).
 
 %% @doc Get environment
--spec(env(Group :: atom(), Name :: atom()) -> undefined | any()).
-env(Group, Name) -> proplists:get_value(Name, env(Group)).
+-spec(env(Key :: atom(), Default :: any()) -> undefined | any()).
+env(Key, Default) -> application:get_env(?APP, Key, Default).
 
 %% @doc Is running?
 -spec(is_running(node()) -> boolean()).
@@ -57,70 +82,100 @@ is_running(Node) ->
     end.
 
 %%--------------------------------------------------------------------
-%% PubSub APIs that wrap emqttd_server, emqttd_pubsub
+%% PubSub APIs
 %%--------------------------------------------------------------------
 
-%% @doc Lookup Topic or Subscription
--spec(lookup(topic, binary()) -> [mqtt_topic()];
-            (subscription, binary()) -> [mqtt_subscription()]).
-lookup(topic, Topic) when is_binary(Topic) ->
-    emqttd_pubsub:lookup_topic(Topic);
+%% @doc Subscribe
+-spec(subscribe(iodata()) -> ok | {error, term()}).
+subscribe(Topic) ->
+    emqttd_server:subscribe(iolist_to_binary(Topic)).
 
-lookup(subscription, ClientId) when is_binary(ClientId) ->
-    emqttd_server:lookup_subscription(ClientId).
+-spec(subscribe(iodata(), subscriber()) -> ok | {error, term()}).
+subscribe(Topic, Subscriber) ->
+    emqttd_server:subscribe(iolist_to_binary(Topic), Subscriber).
 
-%% @doc Create a Topic or Subscription
--spec(create(topic | subscription, binary()) -> ok | {error, any()}).
-create(topic, Topic) when is_binary(Topic) ->
-    emqttd_pubsub:create_topic(Topic);
-
-create(subscription, {ClientId, Topic, Qos}) ->
-    Subscription = #mqtt_subscription{subid = ClientId, topic = Topic, qos = ?QOS_I(Qos)},
-    emqttd_backend:add_subscription(Subscription).
+-spec(subscribe(iodata(), subscriber(), [suboption()]) -> ok | {error, term()}).
+subscribe(Topic, Subscriber, Options) ->
+    emqttd_server:subscribe(iolist_to_binary(Topic), Subscriber, Options).
 
 %% @doc Publish MQTT Message
--spec(publish(mqtt_message()) -> ok).
-publish(Msg) when is_record(Msg, mqtt_message) ->
-    emqttd_server:publish(Msg), ok.
-
-%% @doc Subscribe
--spec(subscribe(binary()) -> ok;
-               ({binary(), binary(), mqtt_qos()}) -> ok).
-subscribe(Topic) when is_binary(Topic) ->
-    emqttd_server:subscribe(Topic);
-subscribe({ClientId, Topic, Qos}) ->
-    subscribe(ClientId, Topic, Qos).
-
--spec(subscribe(binary(), binary(), mqtt_qos()) -> {ok, mqtt_qos()}).
-subscribe(ClientId, Topic, Qos) ->
-    emqttd_server:subscribe(ClientId, Topic, Qos).
+-spec(publish(mqtt_message()) -> {ok, mqtt_delivery()} | ignore).
+publish(Msg) ->
+    emqttd_server:publish(Msg).
 
 %% @doc Unsubscribe
--spec(unsubscribe(binary()) -> ok).
-unsubscribe(Topic) when is_binary(Topic) ->
-    emqttd_server:unsubscribe(Topic).
+-spec(unsubscribe(iodata()) -> ok | {error, term()}).
+unsubscribe(Topic) ->
+    emqttd_server:unsubscribe(iolist_to_binary(Topic)).
 
--spec(unsubscribe(binary(), binary(), mqtt_qos()) -> ok).
-unsubscribe(ClientId, Topic, Qos) ->
-    emqttd_server:unsubscribe(ClientId, Topic, Qos).
+-spec(unsubscribe(iodata(), subscriber()) -> ok | {error, term()}).
+unsubscribe(Topic, Subscriber) ->
+    emqttd_server:unsubscribe(iolist_to_binary(Topic), Subscriber).
+
+-spec(setqos(binary(), subscriber(), mqtt_qos()) -> ok).
+setqos(Topic, Subscriber, Qos) ->
+    emqttd_server:setqos(iolist_to_binary(Topic), Subscriber, Qos).
+
+-spec(topics() -> [binary()]).
+topics() -> emqttd_router:topics().
+
+-spec(subscribers(iodata()) -> list(subscriber())).
+subscribers(Topic) ->
+    emqttd_server:subscribers(iolist_to_binary(Topic)).
+
+-spec(subscriptions(subscriber()) -> [{emqttd:subscriber(), binary(), list(emqttd:suboption())}]).
+subscriptions(Subscriber) ->
+    emqttd_server:subscriptions(Subscriber).
+
+-spec(subscribed(iodata(), subscriber()) -> boolean()).
+subscribed(Topic, Subscriber) ->
+    emqttd_server:subscribed(iolist_to_binary(Topic), Subscriber).
 
 %%--------------------------------------------------------------------
 %% Hooks API
 %%--------------------------------------------------------------------
 
--spec(hook(atom(), function(), list(any())) -> ok | {error, any()}).
-hook(Hook, Function, InitArgs) ->
-    emqttd_hook:add(Hook, Function, InitArgs).
+-spec(hook(atom(), function() | {emqttd_hooks:hooktag(), function()}, list(any()))
+      -> ok | {error, term()}).
+hook(Hook, TagFunction, InitArgs) ->
+    emqttd_hooks:add(Hook, TagFunction, InitArgs).
 
--spec(hook(atom(), function(), list(any()), integer()) -> ok | {error, any()}).
-hook(Hook, Function, InitArgs, Priority) ->
-    emqttd_hook:add(Hook, Function, InitArgs, Priority).
+-spec(hook(atom(), function() | {emqttd_hooks:hooktag(), function()}, list(any()), integer())
+      -> ok | {error, term()}).
+hook(Hook, TagFunction, InitArgs, Priority) ->
+    emqttd_hooks:add(Hook, TagFunction, InitArgs, Priority).
 
--spec(unhook(atom(), function()) -> ok | {error, any()}).
-unhook(Hook, Function) ->
-    emqttd_hook:delete(Hook, Function).
+-spec(unhook(atom(), function() | {emqttd_hooks:hooktag(), function()})
+      -> ok | {error, term()}).
+unhook(Hook, TagFunction) ->
+    emqttd_hooks:delete(Hook, TagFunction).
+
+-spec(run_hooks(atom(), list(any())) -> ok | stop).
+run_hooks(Hook, Args) ->
+    emqttd_hooks:run(Hook, Args).
 
 -spec(run_hooks(atom(), list(any()), any()) -> {ok | stop, any()}).
 run_hooks(Hook, Args, Acc) ->
-    emqttd_hook:run(Hook, Args, Acc).
+    emqttd_hooks:run(Hook, Args, Acc).
+
+%%--------------------------------------------------------------------
+%% Shutdown and reboot
+%%--------------------------------------------------------------------
+
+shutdown() ->
+    shutdown(normal).
+
+shutdown(Reason) ->
+    lager:error("EMQ shutdown for ~s", [Reason]),
+    emqttd_plugins:unload(),
+    lists:foreach(fun application:stop/1, [emqttd, ekka, mochiweb, esockd, gproc]).
+
+reboot() ->
+    lists:foreach(fun application:start/1, [gproc, esockd, mochiweb, ekka, emqttd]).
+
+%%--------------------------------------------------------------------
+%% Debug
+%%--------------------------------------------------------------------
+
+dump() -> lists:append([emqttd_server:dump(), emqttd_router:dump()]).
 

@@ -1,66 +1,57 @@
-.PHONY: rel deps test plugins
+PROJECT = emqttd
+PROJECT_DESCRIPTION = Erlang MQTT Broker
+PROJECT_VERSION = 2.3.3
 
-APP      = emqttd
-BASE_DIR = $(shell pwd)
-REBAR    = $(BASE_DIR)/rebar
-DIST	 = $(BASE_DIR)/rel/$(APP)
+DEPS = goldrush gproc lager esockd ekka mochiweb pbkdf2 lager_syslog bcrypt clique jsx
 
-all: submods compile
+dep_goldrush     = git https://github.com/basho/goldrush 0.1.9
+dep_gproc        = git https://github.com/uwiger/gproc
+dep_getopt       = git https://github.com/jcomellas/getopt v0.8.2
+dep_lager        = git https://github.com/basho/lager master
+dep_esockd       = git https://github.com/emqtt/esockd v5.2
+dep_ekka         = git https://github.com/emqtt/ekka v0.2.2
+dep_mochiweb     = git https://github.com/emqtt/mochiweb v4.2.1
+dep_pbkdf2       = git https://github.com/emqtt/pbkdf2 2.0.1
+dep_lager_syslog = git https://github.com/basho/lager_syslog
+dep_bcrypt       = git https://github.com/smarkets/erlang-bcrypt master
+dep_clique       = git https://github.com/emqtt/clique
+dep_jsx          = git https://github.com/talentdeficit/jsx
 
-submods:
-	@git submodule update --init
+ERLC_OPTS += +debug_info
+ERLC_OPTS += +'{parse_transform, lager_transform}'
 
-compile: deps
-	@$(REBAR) compile
+NO_AUTOPATCH = cuttlefish
 
-deps:
-	@$(REBAR) get-deps
+BUILD_DEPS = cuttlefish
+dep_cuttlefish = git https://github.com/emqtt/cuttlefish
 
-update-deps:
-	@$(REBAR) update-deps
+TEST_DEPS = emqttc emq_dashboard
+dep_emqttc = git https://github.com/emqtt/emqttc
+dep_emq_dashboard = git https://github.com/emqtt/emq_dashboard develop
 
-xref:
-	@$(REBAR) xref skip_deps=true
+TEST_ERLC_OPTS += +debug_info
+TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
 
-clean:
-	@$(REBAR) clean
+EUNIT_OPTS = verbose
+# EUNIT_ERL_OPTS =
 
-test:
-	ERL_FLAGS="-config rel/files/emqttd.test.config" $(REBAR) -v skip_deps=true ct
-	#$(REBAR) skip_deps=true eunit
+CT_SUITES = emqttd emqttd_access emqttd_lib emqttd_inflight emqttd_mod \
+            emqttd_net emqttd_mqueue emqttd_protocol emqttd_topic \
+            emqttd_router emqttd_trie emqttd_vm emqttd_config
 
-edoc:
-	@$(REBAR) doc
+CT_OPTS = -cover test/ct.cover.spec -erl_args -name emqttd_ct@127.0.0.1
 
-rel: compile
-	@cd rel && $(REBAR) generate -f
+COVER = true
 
-plugins:
-	@for plugin in ./plugins/* ; do \
-	if [ -d $${plugin} ]; then \
-		mkdir -p $(DIST)/$${plugin}/ ; \
-		cp -R $${plugin}/ebin $(DIST)/$${plugin}/ ; \
-		[ -d "$${plugin}/priv" ] && cp -R $${plugin}/priv $(DIST)/$${plugin}/ ; \
-		[ -d "$${plugin}/etc" ] && cp -R $${plugin}/etc $(DIST)/$${plugin}/ ; \
-		echo "$${plugin} copied" ; \
-	fi \
-	done
+PLT_APPS = sasl asn1 ssl syntax_tools runtime_tools crypto xmerl os_mon inets public_key ssl lager compiler mnesia
+DIALYZER_DIRS := ebin/
+DIALYZER_OPTS := --verbose --statistics -Werror_handling \
+                 -Wrace_conditions #-Wunmatched_returns
 
-dist: rel plugins
+include erlang.mk
 
-PLT  = $(BASE_DIR)/.emqttd_dialyzer.plt
-APPS = erts kernel stdlib sasl crypto ssl os_mon syntax_tools \
-	   public_key mnesia inets compiler
+app:: rebar.config
 
-check_plt: compile
-	dialyzer --check_plt --plt $(PLT) --apps $(APPS) \
-		deps/*/ebin ./ebin plugins/*/ebin
-
-build_plt: compile
-	dialyzer --build_plt --output_plt $(PLT) --apps $(APPS) \
-		deps/*/ebin ./ebin plugins/*/ebin
-
-dialyzer: compile
-	dialyzer -Wno_return --plt $(PLT) deps/*/ebin ./ebin plugins/*/ebin
-
+app.config::
+	./deps/cuttlefish/cuttlefish -l info -e etc/ -c etc/emq.conf -i priv/emq.schema -d data/
 

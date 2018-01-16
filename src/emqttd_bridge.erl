@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@
 
 -behaviour(gen_server2).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -include("emqttd.hrl").
 
 -include("emqttd_protocol.hrl").
@@ -25,7 +27,7 @@
 -include("emqttd_internal.hrl").
 
 %% API Function Exports
--export([start_link/3]).
+-export([start_link/5]).
 
 %% gen_server Function Exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -33,20 +35,19 @@
 
 -define(PING_DOWN_INTERVAL, 1000).
 
--record(state, {node, subtopic,
-                qos                = ?QOS_2,
+-record(state, {pool, id,
+                node, subtopic,
                 topic_suffix       = <<>>,
                 topic_prefix       = <<>>,
-                mqueue            :: emqttd_mqueue:mqueue(),
+                mqueue             :: emqttd_mqueue:mqueue(),
                 max_queue_len      = 10000,
                 ping_down_interval = ?PING_DOWN_INTERVAL,
                 status             = up}).
 
--type option()  :: {qos, mqtt_qos()} |
-                   {topic_suffix, binary()} |
-                   {topic_prefix, binary()} |
-                   {max_queue_len, pos_integer()} |
-                   {ping_down_interval, pos_integer()}.
+-type(option() :: {topic_suffix, binary()} |
+                  {topic_prefix, binary()} |
+                  {max_queue_len, pos_integer()} |
+                  {ping_down_interval, pos_integer()}).
 
 -export_type([option/0]).
 
@@ -55,33 +56,35 @@
 %%--------------------------------------------------------------------
 
 %% @doc Start a bridge
--spec(start_link(atom(), binary(), [option()]) -> {ok, pid()} | ignore | {error, term()}).
-start_link(Node, Topic, Options) ->
-    gen_server2:start_link(?MODULE, [Node, Topic, Options], []).
+-spec(start_link(any(), pos_integer(), atom(), binary(), [option()]) ->
+    {ok, pid()} | ignore | {error, term()}).
+start_link(Pool, Id, Node, Topic, Options) ->
+    gen_server2:start_link(?MODULE, [Pool, Id, Node, Topic, Options], []).
 
 %%--------------------------------------------------------------------
 %% gen_server callbacks
 %%--------------------------------------------------------------------
 
-init([Node, Topic, Options]) ->
+init([Pool, Id, Node, Topic, Options]) ->
+    ?GPROC_POOL(join, Pool, Id),
     process_flag(trap_exit, true),
     case net_kernel:connect_node(Node) of
         true -> 
             true = erlang:monitor_node(Node, true),
+            Share = iolist_to_binary(["$bridge:", atom_to_list(Node), ":", Topic]),
+            emqttd:subscribe(Topic, self(), [local, {share, Share}, {qos, ?QOS_0}]),
             State = parse_opts(Options, #state{node = Node, subtopic = Topic}),
             MQueue = emqttd_mqueue:new(qname(Node, Topic),
                                        [{max_len, State#state.max_queue_len}],
                                        emqttd_alarm:alarm_fun()),
-            emqttd:subscribe(Topic),
-            {ok, State#state{mqueue = MQueue}};
+            {ok, State#state{pool = Pool, id = Id, mqueue = MQueue},
+             hibernate, {backoff, 1000, 1000, 10000}};
         false -> 
-            {stop, {cannot_connect, Node}}
+            {stop, {cannot_connect_node, Node}}
     end.
 
 parse_opts([], State) ->
     State;
-parse_opts([{qos, Qos} | Opts], State) ->
-    parse_opts(Opts, State#state{qos = Qos});
 parse_opts([{topic_suffix, Suffix} | Opts], State) ->
     parse_opts(Opts, State#state{topic_suffix= Suffix});
 parse_opts([{topic_prefix, Prefix} | Opts], State) ->
@@ -89,7 +92,7 @@ parse_opts([{topic_prefix, Prefix} | Opts], State) ->
 parse_opts([{max_queue_len, Len} | Opts], State) ->
     parse_opts(Opts, State#state{max_queue_len = Len});
 parse_opts([{ping_down_interval, Interval} | Opts], State) ->
-    parse_opts(Opts, State#state{ping_down_interval = Interval*1000});
+    parse_opts(Opts, State#state{ping_down_interval = Interval});
 parse_opts([_Opt | Opts], State) ->
     parse_opts(Opts, State).
 
@@ -119,7 +122,7 @@ handle_info({nodedown, Node}, State = #state{node = Node, ping_down_interval = I
 handle_info({nodeup, Node}, State = #state{node = Node}) ->
     %% TODO: Really fast??
     case emqttd:is_running(Node) of
-        true -> 
+        true ->
             lager:warning("Bridge Node Up: ~p", [Node]),
             {noreply, dequeue(State#state{status = up})};
         false ->
@@ -145,7 +148,8 @@ handle_info({'EXIT', _Pid, normal}, State) ->
 handle_info(Info, State) ->
     ?UNEXPECTED_INFO(Info, State).
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{pool = Pool, id = Id}) ->
+    ?GPROC_POOL(leave, Pool, Id),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

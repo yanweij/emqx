@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,18 +16,20 @@
 
 -module(emqttd_topic_SUITE).
 
+-include_lib("eunit/include/eunit.hrl").
+
 %% CT
 -compile(export_all).
 
 -import(emqttd_topic, [wildcard/1, match/2, validate/1, triples/1, join/1,
-                       words/1, systop/1, is_queue/1, feed_var/3]).
+                       words/1, systop/1, feed_var/3, parse/1, parse/2]).
 
 -define(N, 10000).
 
-all() -> [t_wildcard, t_match, t_match2, t_validate, t_triples, t_join,
-          t_words, t_systop, t_is_queue, t_feed_var, t_sys_match, 't_#_match',
+all() -> [t_wildcard, t_match, t_match2, t_match3, t_validate, t_triples, t_join,
+          t_words, t_systop, t_feed_var, t_sys_match, 't_#_match',
           t_sigle_level_validate, t_sigle_level_match, t_match_perf,
-          t_triples_perf].
+          t_triples_perf, t_parse].
 
 t_wildcard(_) ->
     true  = wildcard(<<"a/b/#">>),
@@ -69,6 +71,14 @@ t_match2(_) ->
     false = match(<<"$shared/x/y">>, <<"+/+/#">>),
     false = match(<<"house/1/sensor/0">>, <<"house/+">>).
 
+t_match3(_) ->
+    true = match(<<"device/60019423a83c/fw">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw/fw">>, <<"device/60019423a83c/$fw/#">>),
+    true = match(<<"device/60019423a83c/fw/checksum">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/$fw/checksum">>, <<"device/60019423a83c/#">>),
+    true = match(<<"device/60019423a83c/dust/type">>, <<"device/60019423a83c/#">>).
+
 t_sigle_level_match(_) ->
     true  = match(<<"sport/tennis/player1">>, <<"sport/tennis/+">>),
     false = match(<<"sport/tennis/player1/ranking">>, <<"sport/tennis/+">>),
@@ -76,7 +86,9 @@ t_sigle_level_match(_) ->
     true  = match(<<"sport/">>, <<"sport/+">>),
     true  = match(<<"/finance">>, <<"+/+">>),
     true  = match(<<"/finance">>, <<"/+">>),
-    false = match(<<"/finance">>, <<"+">>).
+    false = match(<<"/finance">>, <<"+">>),
+    true  = match(<<"/devices/$dev1">>, <<"/devices/+">>),
+    true  = match(<<"/devices/$dev1/online">>, <<"/devices/+/online">>).
 
 t_sys_match(_) ->
     true  = match(<<"$SYS/broker/clients/testclient">>, <<"$SYS/#">>),
@@ -85,9 +97,11 @@ t_sys_match(_) ->
     false = match(<<"$SYS/broker">>, <<"#">>).
 
 't_#_match'(_) ->
-    true = match(<<"a/b/c">>, <<"#">>),
-    true = match(<<"a/b/c">>, <<"+/#">>),
-    false = match(<<"$SYS/brokers">>, <<"#">>).
+    true  = match(<<"a/b/c">>, <<"#">>),
+    true  = match(<<"a/b/c">>, <<"+/#">>),
+    false = match(<<"$SYS/brokers">>, <<"#">>),
+    true  = match(<<"a/b/$c">>, <<"a/b/#">>),
+    true  = match(<<"a/b/$c">>, <<"a/#">>).
 
 t_match_perf(_) ->
     true = match(<<"a/b/ccc">>, <<"a/#">>),
@@ -155,21 +169,25 @@ t_join(_) ->
     <<"/ab/cd/ef/">> = join(words(<<"/ab/cd/ef/">>)),
     <<"ab/+/#">> = join(words(<<"ab/+/#">>)).
 
-t_is_queue(_) ->
-    true  = is_queue(<<"$queue/queue">>),
-    false = is_queue(<<"xyz/queue">>).
-
 t_systop(_) ->
     SysTop1 = iolist_to_binary(["$SYS/brokers/", atom_to_list(node()), "/xyz"]),
-    SysTop1 = systop('xyz'),
+    ?assertEqual(SysTop1, systop('xyz')),
     SysTop2 = iolist_to_binary(["$SYS/brokers/", atom_to_list(node()), "/abc"]),
-    SysTop2 = systop(<<"abc">>).
+    ?assertEqual(SysTop2,systop(<<"abc">>)).
 
 t_feed_var(_) ->
-    <<"$queue/client/clientId">> = feed_var(<<"$c">>, <<"clientId">>, <<"$queue/client/$c">>),
-    <<"username/test/client/x">> = feed_var(<<"%u">>, <<"test">>, <<"username/%u/client/x">>),
-    <<"username/test/client/clientId">> = feed_var(<<"%c">>, <<"clientId">>, <<"username/test/client/%c">>).
+    ?assertEqual(<<"$queue/client/clientId">>, feed_var(<<"$c">>, <<"clientId">>, <<"$queue/client/$c">>)),
+    ?assertEqual(<<"username/test/client/x">>, feed_var(<<"%u">>, <<"test">>, <<"username/%u/client/x">>)),
+    ?assertEqual(<<"username/test/client/clientId">>, feed_var(<<"%c">>, <<"clientId">>, <<"username/test/client/%c">>)).
 
 long_topic() ->
     iolist_to_binary([[integer_to_list(I), "/"] || I <- lists:seq(0, 10000)]).
+
+t_parse(_) ->
+    ?assertEqual({<<"a/b/+/#">>, []}, parse(<<"a/b/+/#">>)),
+    ?assertEqual({<<"topic">>, [{share, '$queue'}]}, parse(<<"$queue/topic">>)),
+    ?assertEqual({<<"topic">>, [{share, <<"group">>}]}, parse(<<"$share/group/topic">>)),
+    ?assertEqual({<<"topic">>, [local]}, parse(<<"$local/topic">>)),
+    ?assertEqual({<<"topic">>, [{share, '$queue'}, local]}, parse(<<"$local/$queue/topic">>)),
+    ?assertEqual({<<"/a/b/c">>, [{share, <<"group">>}, local]}, parse(<<"$local/$share/group//a/b/c">>)).
 

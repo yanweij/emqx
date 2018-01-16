@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,18 +22,20 @@
 
 -define(TRIE, emqttd_trie).
 
+-include_lib("eunit/include/eunit.hrl").
+
 all() ->
     [t_insert, t_match, t_match2, t_match3, t_delete, t_delete2, t_delete3].
 
 init_per_suite(Config) ->
-    emqttd_mnesia:ensure_started(),
+    ekka_mnesia:ensure_started(),
     ?TRIE:mnesia(boot),
     ?TRIE:mnesia(copy),
     Config.
 
 end_per_suite(_Config) ->
-    emqttd_mnesia:ensure_stopped(),
-    emqttd_mnesia:delete_schema().
+    ekka_mnesia:ensure_stopped(),
+    ekka_mnesia:delete_schema().
 
 init_per_testcase(_TestCase, Config) ->
     Config.
@@ -81,9 +83,9 @@ t_match3(_) ->
     Topics = [<<"d/#">>, <<"a/b/c">>, <<"a/b/+">>, <<"a/#">>, <<"#">>, <<"$SYS/#">>],
     mnesia:transaction(fun() -> [emqttd_trie:insert(Topic) || Topic <- Topics] end),
     Matched = mnesia:async_dirty(fun emqttd_trie:match/1, [<<"a/b/c">>]),
-    4 = length(Matched),
+    ?assertEqual(4, length(Matched)),
     SysMatched = mnesia:async_dirty(fun emqttd_trie:match/1, [<<"$SYS/a/b/c">>]),
-    [<<"$SYS/#">>] = SysMatched.
+    ?assertEqual([<<"$SYS/#">>], SysMatched).
 
 t_delete(_) ->
     TN = #trie_node{node_id = <<"sensor/1">>,
@@ -129,5 +131,5 @@ t_delete3(_) ->
             end).
 
 clear_tables() ->
-    lists:foreach(fun mnesia:clear_table/1, [trie, trie_node]).
+    lists:foreach(fun mnesia:clear_table/1, [mqtt_trie, mqtt_trie_node]).
 

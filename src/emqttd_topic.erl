@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,19 +16,31 @@
 
 -module(emqttd_topic).
 
+-author("Feng Lee <feng@emqtt.io>").
+
+-include("emqttd_protocol.hrl").
+
+-include("emqttd_internal.hrl").
+
+-import(lists, [reverse/1]).
+
 -export([match/2, validate/1, triples/1, words/1, wildcard/1]).
 
--export([join/1, feed_var/3, is_queue/1, systop/1]).
+-export([join/1, feed_var/3, systop/1]).
 
--type topic() :: binary().
+-export([parse/1, parse/2]).
 
--type word()   :: '' | '+' | '#' | binary().
+-type(topic() :: binary()).
 
--type words()  :: list(word()).
+-type(option() :: local | {qos, mqtt_qos()} | {share, '$queue' | binary()}).
 
--type triple() :: {root | binary(), word(), binary()}.
+-type(word()   :: '' | '+' | '#' | binary()).
 
--export_type([topic/0, word/0, triple/0]).
+-type(words()  :: list(word())).
+
+-type(triple() :: {root | binary(), word(), binary()}).
+
+-export_type([topic/0, option/0, word/0, triple/0]).
 
 -define(MAX_TOPIC_LEN, 4096).
 
@@ -47,20 +59,20 @@ wildcard([_H|T]) ->
 
 %% @doc Match Topic name with filter
 -spec(match(Name, Filter) -> boolean() when
-      Name    :: topic() | words(),
-      Filter  :: topic() | words()).
+      Name   :: topic() | words(),
+      Filter :: topic() | words()).
+match(<<$$, _/binary>>, <<$+, _/binary>>) ->
+    false;
+match(<<$$, _/binary>>, <<$#, _/binary>>) ->
+    false;
 match(Name, Filter) when is_binary(Name) and is_binary(Filter) ->
     match(words(Name), words(Filter));
 match([], []) ->
     true;
 match([H|T1], [H|T2]) ->
     match(T1, T2);
-match([<<$$, _/binary>>|_], ['+'|_]) ->
-    false;
 match([_H|T1], ['+'|T2]) ->
     match(T1, T2);
-match([<<$$, _/binary>>|_], ['#']) ->
-    false;
 match(_, ['#']) ->
     true;
 match([_H1|_], [_H2|_]) ->
@@ -86,17 +98,14 @@ validate2([]) ->
     true;
 validate2(['#']) -> % end with '#'
     true;
-validate2(['#'|Words]) when length(Words) > 0 -> 
-    false; 
+validate2(['#'|Words]) when length(Words) > 0 ->
+    false;
 validate2([''|Words]) ->
     validate2(Words);
 validate2(['+'|Words]) ->
     validate2(Words);
 validate2([W|Words]) ->
-    case validate3(W) of
-        true -> validate2(Words);
-        false -> false
-    end.
+    case validate3(W) of true -> validate2(Words); false -> false end.
 
 validate3(<<>>) ->
     true;
@@ -111,7 +120,7 @@ triples(Topic) when is_binary(Topic) ->
     triples(words(Topic), root, []).
 
 triples([], _Parent, Acc) ->
-    lists:reverse(Acc);
+    reverse(Acc);
 
 triples([W|Words], Parent, Acc) ->
     Node = join(Parent, W),
@@ -137,13 +146,6 @@ word(<<"+">>) -> '+';
 word(<<"#">>) -> '#';
 word(Bin)     -> Bin.
 
-%% @doc Queue is a special topic name that starts with "$queue/"
--spec(is_queue(topic()) -> boolean()).
-is_queue(<<"$queue/", _Queue/binary>>) ->
-    true;
-is_queue(_) ->
-    false.
-
 %% @doc '$SYS' Topic.
 systop(Name) when is_atom(Name) ->
     list_to_binary(lists:concat(["$SYS/brokers/", node(), "/", Name]));
@@ -155,7 +157,7 @@ systop(Name) when is_binary(Name) ->
 feed_var(Var, Val, Topic) ->
     feed_var(Var, Val, words(Topic), []).
 feed_var(_Var, _Val, [], Acc) ->
-    join(lists:reverse(Acc));
+    join(reverse(Acc));
 feed_var(Var, Val, [Var|Words], Acc) ->
     feed_var(Var, Val, Words, [Val|Acc]);
 feed_var(Var, Val, [W|Words], Acc) ->
@@ -174,4 +176,33 @@ join(Words) ->
                         {false, <<W/binary, "/", Tail/binary>>}
                 end, {true, <<>>}, [bin(W) || W <- Words]),
     Bin.
+
+-spec(parse(topic()) -> {topic(), [option()]}).
+parse(Topic) when is_binary(Topic) ->
+    parse(Topic, []).
+
+parse(<<"$local/", Topic1/binary>>, Options) ->
+    if_not_contain(local, Options, fun() ->
+                       parse(Topic1, [local | Options])
+                   end);
+
+parse(<<"$queue/", Topic1/binary>>, Options) ->
+    if_not_contain(share, Options,fun() ->
+                       parse(Topic1, [{share, '$queue'} | Options])
+                   end);
+
+parse(<<"$share/", Topic1/binary>>, Options) ->
+    if_not_contain(share, Options, fun() ->
+                       [Share, Topic2] = binary:split(Topic1, <<"/">>),
+                       {Topic2, [{share, Share} | Options]}
+                   end);
+
+parse(Topic, Options) ->
+    {Topic, Options}.
+
+if_not_contain(local, Options, Fun) ->
+    ?IF(lists:member(local, Options), error(invalid_topic), Fun());
+
+if_not_contain(share, Options, Fun) ->
+    ?IF(lists:keyfind(share, 1, Options), error(invalid_topic), Fun()).
 

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,8 +14,10 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
-%% @doc emqttd session supervisor.
+%% @doc Session Supervisor.
 -module(emqttd_session_sup).
+
+-author("Feng Lee <feng@emqtt.io>").
 
 -behavior(supervisor).
 
@@ -29,9 +31,9 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% @doc Start a session
--spec(start_session(boolean(), binary(), pid()) -> {ok, pid()}).
-start_session(CleanSess, ClientId, ClientPid) ->
-    supervisor:start_child(?MODULE, [CleanSess, ClientId, ClientPid]).
+-spec(start_session(boolean(), {binary(), binary() | undefined} , pid()) -> {ok, pid()}).
+start_session(CleanSess, {ClientId, Username}, ClientPid) ->
+    supervisor:start_child(?MODULE, [CleanSess, {ClientId, Username}, ClientPid]).
 
 %%--------------------------------------------------------------------
 %% Supervisor callbacks
@@ -41,4 +43,3 @@ init([]) ->
     {ok, {{simple_one_for_one, 0, 1},
           [{session, {emqttd_session, start_link, []},
               temporary, 5000, worker, [emqttd_session]}]}}.
-

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -152,7 +152,7 @@ schedulers() ->
     erlang:system_info(schedulers).
 
 microsecs() ->
-    {Mega, Sec, Micro} = erlang:now(),
+    {Mega, Sec, Micro} = os:timestamp(),
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
 loads() ->

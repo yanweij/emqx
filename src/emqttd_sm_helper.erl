@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 %% @doc Session Helper.
 -module(emqttd_sm_helper).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -behaviour(gen_server).
 
 -include("emqttd.hrl").
@@ -32,17 +34,19 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {stats_fun, tick_tref}).
+-record(state, {stats_fun, ticker}).
+
+-define(LOCK, {?MODULE, clean_sessions}).
 
 %% @doc Start a session helper
--spec(start_link(fun()) -> {ok, pid()} | ignore | {error, any()}).
+-spec(start_link(fun()) -> {ok, pid()} | ignore | {error, term()}).
 start_link(StatsFun) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [StatsFun], []).
 
 init([StatsFun]) ->
-    mnesia:subscribe(system),
+    ekka:monitor(membership),
     {ok, TRef} = timer:send_interval(timer:seconds(1), tick),
-    {ok, #state{stats_fun = StatsFun, tick_tref = TRef}}.
+    {ok, #state{stats_fun = StatsFun, ticker = TRef}}.
 
 handle_call(Req, _From, State) ->
     ?UNEXPECTED_REQ(Req, State).
@@ -50,19 +54,17 @@ handle_call(Req, _From, State) ->
 handle_cast(Msg, State) ->
     ?UNEXPECTED_MSG(Msg, State).
 
-handle_info({mnesia_system_event, {mnesia_down, Node}}, State) ->
-    lager:error("!!!Mnesia node down: ~s", [Node]),
+handle_info({membership, {mnesia, down, Node}}, State) ->
     Fun = fun() ->
             ClientIds =
-            mnesia:select(session, [{#mqtt_session{client_id = '$1', sess_pid = '$2', _ = '_'},
-                                    [{'==', {node, '$2'}, Node}],
-                                    ['$1']}]),
-            lists:foreach(fun(ClientId) -> mnesia:delete({session, ClientId}) end, ClientIds)
+            mnesia:select(mqtt_session, [{#mqtt_session{client_id = '$1', sess_pid = '$2', _ = '_'},
+                                         [{'==', {node, '$2'}, Node}], ['$1']}]),
+            lists:foreach(fun(ClientId) -> mnesia:delete({mqtt_session, ClientId}) end, ClientIds)
           end,
-    mnesia:async_dirty(Fun),
-    {noreply, State};
+    global:trans({?LOCK, self()}, fun() -> mnesia:async_dirty(Fun) end),
+    {noreply, State, hibernate};
 
-handle_info({mnesia_system_event, {mnesia_up, _Node}}, State) ->
+handle_info({membership, _Event}, State) ->
     {noreply, State};
 
 handle_info(tick, State) ->
@@ -71,9 +73,9 @@ handle_info(tick, State) ->
 handle_info(Info, State) ->
     ?UNEXPECTED_INFO(Info, State).
 
-terminate(_Reason, _State = #state{tick_tref = TRef}) ->
+terminate(_Reason, _State = #state{ticker = TRef}) ->
     timer:cancel(TRef),
-    mnesia:unsubscribe(system).
+    ekka:unmonitor(membership).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -83,5 +85,5 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 
 setstats(State = #state{stats_fun = StatsFun}) ->
-    StatsFun(ets:info(mqtt_persistent_session, size)), State.
+    StatsFun(ets:info(mqtt_local_session, size)), State.
 

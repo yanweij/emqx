@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,21 +16,24 @@
 
 -module(emqttd_access_rule).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -include("emqttd.hrl").
 
--type who() :: all | binary() |
+
+-type(who() :: all | binary() |
                {ipaddr, esockd_cidr:cidr_string()} |
                {client, binary()} |
-               {user, binary()}.
+               {user, binary()}).
 
--type access() :: subscribe | publish | pubsub.
+-type(access() :: subscribe | publish | pubsub).
 
--type topic() :: binary().
+-type(topic() :: binary()).
 
--type rule() :: {allow, all} |
+-type(rule() :: {allow, all} |
                 {allow, who(), access(), list(topic())} |
                 {deny, all} |
-                {deny, who(), access(), list(topic())}.
+                {deny, who(), access(), list(topic())}).
 
 -export_type([rule/0]).
 
@@ -75,8 +78,8 @@ compile(topic, Topic) ->
     end.
 
 'pattern?'(Words) ->
-    lists:member(<<"$u">>, Words)
-        orelse lists:member(<<"$c">>, Words).
+    lists:member(<<"%u">>, Words)
+        orelse lists:member(<<"%c">>, Words).
 
 bin(L) when is_list(L) ->
     list_to_binary(L);
@@ -142,13 +145,13 @@ feed_var(Client, Pattern) ->
     feed_var(Client, Pattern, []).
 feed_var(_Client, [], Acc) ->
     lists:reverse(Acc);
-feed_var(Client = #mqtt_client{client_id = undefined}, [<<"$c">>|Words], Acc) ->
-    feed_var(Client, Words, [<<"$c">>|Acc]);
-feed_var(Client = #mqtt_client{client_id = ClientId}, [<<"$c">>|Words], Acc) ->
+feed_var(Client = #mqtt_client{client_id = undefined}, [<<"%c">>|Words], Acc) ->
+    feed_var(Client, Words, [<<"%c">>|Acc]);
+feed_var(Client = #mqtt_client{client_id = ClientId}, [<<"%c">>|Words], Acc) ->
     feed_var(Client, Words, [ClientId |Acc]);
-feed_var(Client = #mqtt_client{username = undefined}, [<<"$u">>|Words], Acc) ->
-    feed_var(Client, Words, [<<"$u">>|Acc]);
-feed_var(Client = #mqtt_client{username = Username}, [<<"$u">>|Words], Acc) ->
+feed_var(Client = #mqtt_client{username = undefined}, [<<"%u">>|Words], Acc) ->
+    feed_var(Client, Words, [<<"%u">>|Acc]);
+feed_var(Client = #mqtt_client{username = Username}, [<<"%u">>|Words], Acc) ->
     feed_var(Client, Words, [Username|Acc]);
 feed_var(Client, [W|Words], Acc) ->
     feed_var(Client, Words, [W|Acc]).

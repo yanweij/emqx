@@ -1,11 +1,12 @@
-{application, emqttd,
- [
-  {description, "Erlang MQTT Broker"},
-  {vsn, "1.1.3"},
-  {id, "emqttd"},
-  {modules, []},
-  {registered, []},
-  {applications, [kernel, stdlib, gproc, esockd, mochiweb]},
-  {mod, {emqttd_app, []}},
-  {env, []}
- ]}.
+{application,emqttd,
+             [{description,"Erlang MQTT Broker"},
+              {vsn,"2.3.3"},
+              {modules,[]},
+              {registered,[emqttd_sup]},
+              {applications,[kernel,stdlib,gproc,lager,esockd,mochiweb,
+                             lager_syslog,pbkdf2,bcrypt]},
+              {env,[]},
+              {mod,{emqttd_app,[]}},
+              {maintainers,["Feng Lee <feng@emqtt.io>"]},
+              {licenses,["Apache-2.0"]},
+              {links,[{"Github","https://github.com/emqtt/emqttd"}]}]}.

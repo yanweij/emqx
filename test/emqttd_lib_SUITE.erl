@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 %%--------------------------------------------------------------------
 
 -module(emqttd_lib_SUITE).
+
+-include_lib("eunit/include/eunit.hrl").
 
 -compile(export_all).
 
@@ -32,15 +34,14 @@
 
 all() -> [{group, guid}, {group, opts},
           {group, ?PQ}, {group, time},
-          {group, node}, {group, base62}].
+          {group, base62}].
 
 groups() ->
-    [{guid, [], [guid_gen]},
+    [{guid, [], [guid_gen, guid_hexstr, guid_base62]},
      {opts, [], [opts_merge]},
      {?PQ,  [], [priority_queue_plen,
                  priority_queue_out2]},
      {time, [], [time_now_to_]},
-     {node, [], [node_is_aliving, node_parse_name]},
      {base62, [], [base62_encode]}].
 
 %%--------------------------------------------------------------------
@@ -56,12 +57,20 @@ guid_gen(_) ->
     Ts2 = emqttd_guid:timestamp(emqttd_guid:gen()),
     true = Ts2 > Ts1.
 
+guid_hexstr(_) ->
+    Guid = emqttd_guid:gen(),
+    ?assertEqual(Guid, emqttd_guid:from_hexstr(emqttd_guid:to_hexstr(Guid))).
+
+guid_base62(_) ->
+    Guid = emqttd_guid:gen(),
+    ?assertEqual(Guid, emqttd_guid:from_base62(emqttd_guid:to_base62(Guid))).
+
 %%--------------------------------------------------------------------
 %% emqttd_opts
 %%--------------------------------------------------------------------
 
 opts_merge(_) ->
-    Opts = emqttd_opts:merge(?SOCKOPTS, [raw,
+    Opts = emqttd_misc:merge_opts(?SOCKOPTS, [raw,
                                          binary,
                                          {backlog, 1024},
                                          {nodelay, false},
@@ -131,21 +140,8 @@ priority_queue_out2(_) ->
 
 time_now_to_(_) ->
     emqttd_time:seed(),
-    emqttd_time:now_to_secs(),
-    emqttd_time:now_to_ms().
-
-%%--------------------------------------------------------------------
-%% emqttd_node
-%%--------------------------------------------------------------------
-
-node_is_aliving(_) ->
-    io:format("Node: ~p~n", [node()]),
-    true = emqttd_node:is_aliving(node()),
-    false = emqttd_node:is_aliving('x@127.0.0.1').
-
-node_parse_name(_) ->
-    'a@127.0.0.1' = emqttd_node:parse_name("a@127.0.0.1"),
-    'b@127.0.0.1' = emqttd_node:parse_name("b").
+    emqttd_time:now_secs(),
+    emqttd_time:now_ms().
 
 %%--------------------------------------------------------------------
 %% base62 encode decode

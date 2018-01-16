@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 -module(emqttd_cli).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -include("emqttd.hrl").
 
 -include("emqttd_cli.hrl").
@@ -30,7 +32,7 @@
 
 -export([status/1, broker/1, cluster/1, users/1, clients/1, sessions/1,
          routes/1, topics/1, subscriptions/1, plugins/1, bridges/1,
-         listeners/1, vm/1, mnesia/1, trace/1]).
+         listeners/1, vm/1, mnesia/1, trace/1, acl/1]).
 
 -define(PROC_INFOKEYS, [status,
                         memory,
@@ -46,7 +48,8 @@
 
 load() ->
     Cmds = [Fun || {Fun, _} <- ?MODULE:module_info(exports), is_cmd(Fun)],
-    [emqttd_ctl:register_cmd(Cmd, {?MODULE, Cmd}, []) || Cmd <- Cmds].
+    [emqttd_ctl:register_cmd(Cmd, {?MODULE, Cmd}, []) || Cmd <- Cmds],
+    emqttd_cli_config:register_config().
 
 is_cmd(Fun) ->
     not lists:member(Fun, [init, load, module_info]).
@@ -57,6 +60,7 @@ is_cmd(Fun) ->
 
 %%--------------------------------------------------------------------
 %% @doc Node status
+
 status([]) ->
     {InternalStatus, _ProvidedStatus} = init:get_status(),
     ?PRINT("Node ~p is ~p~n", [node(), InternalStatus]),
@@ -71,6 +75,7 @@ status(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Query broker
+
 broker([]) ->
     Funs = [sysdescr, version, uptime, datetime],
     foreach(fun(Fun) ->
@@ -105,17 +110,20 @@ broker(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Cluster with other nodes
+
 cluster(["join", SNode]) ->
-    case emqttd_cluster:join(emqttd_node:parse_name(SNode)) of
+    case ekka:join(ekka_node:parse_name(SNode)) of
         ok ->
             ?PRINT_MSG("Join the cluster successfully.~n"),
             cluster(["status"]);
+        ignore ->
+            ?PRINT_MSG("Ignore.~n");
         {error, Error} ->
             ?PRINT("Failed to join the cluster: ~p~n", [Error])
     end;
 
 cluster(["leave"]) ->
-    case emqttd_cluster:leave() of
+    case ekka:leave() of
         ok ->
             ?PRINT_MSG("Leave the cluster successfully.~n"),
             cluster(["status"]);
@@ -123,30 +131,37 @@ cluster(["leave"]) ->
             ?PRINT("Failed to leave the cluster: ~p~n", [Error])
     end;
 
-cluster(["remove", SNode]) ->
-    case emqttd_cluster:remove(emqttd_node:parse_name(SNode)) of
+cluster(["force-leave", SNode]) ->
+    case ekka:force_leave(ekka_node:parse_name(SNode)) of
         ok ->
             ?PRINT_MSG("Remove the node from cluster successfully.~n"),
             cluster(["status"]);
+        ignore ->
+            ?PRINT_MSG("Ignore.~n");
         {error, Error} ->
             ?PRINT("Failed to remove the node from cluster: ~p~n", [Error])
     end;
 
 cluster(["status"]) ->
-    ?PRINT("Cluster status: ~p~n", [emqttd_cluster:status()]);
+    ?PRINT("Cluster status: ~p~n", [ekka_cluster:status()]);
 
 cluster(_) ->
-    ?USAGE([{"cluster join <Node>",  "Join the cluster"},
-            {"cluster leave",        "Leave the cluster"},
-            {"cluster remove <Node>","Remove the node from cluster"},
-            {"cluster status",       "Cluster status"}]).
+    ?USAGE([{"cluster join <Node>",       "Join the cluster"},
+            {"cluster leave",             "Leave the cluster"},
+            {"cluster force-leave <Node>","Force the node leave from cluster"},
+            {"cluster status",            "Cluster status"}]).
 
 %%--------------------------------------------------------------------
 %% @doc Users usage
-users(Args) -> emqttd_auth_username:cli(Args).
+
+users(Args) -> emq_auth_username:cli(Args).
+
+acl(["reload"]) -> emqttd_access_control:reload_acl();
+acl(_) -> ?USAGE([{"acl reload", "reload etc/acl.conf"}]).
 
 %%--------------------------------------------------------------------
 %% @doc Query clients
+
 clients(["list"]) ->
     dump(mqtt_client);
 
@@ -169,25 +184,24 @@ if_client(ClientId, Fun) ->
 
 %%--------------------------------------------------------------------
 %% @doc Sessions Command
+
 sessions(["list"]) ->
-    [sessions(["list", Type]) || Type <- ["persistent", "transient"]];
+    dump(mqtt_local_session);
+
+%% performance issue?
 
 sessions(["list", "persistent"]) ->
-    dump(mqtt_persistent_session);
+    lists:foreach(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', false, '_'}));
+
+%% performance issue?
 
 sessions(["list", "transient"]) ->
-    dump(mqtt_transient_session);
+    lists:foreach(fun print/1, ets:match_object(mqtt_local_session, {'_', '_', true, '_'}));
 
 sessions(["show", ClientId]) ->
-    MP = {{bin(ClientId), '_'}, '_'},
-    case {ets:match_object(mqtt_transient_session,  MP),
-          ets:match_object(mqtt_persistent_session, MP)} of
-        {[], []} ->
-            ?PRINT_MSG("Not Found.~n");
-        {[SessInfo], _} ->
-            print(SessInfo);
-        {_, [SessInfo]} ->
-            print(SessInfo)
+    case ets:lookup(mqtt_local_session, bin(ClientId)) of
+        []         -> ?PRINT_MSG("Not Found.~n");
+        [SessInfo] -> print(SessInfo)
     end;
 
 sessions(_) ->
@@ -198,11 +212,15 @@ sessions(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Routes Command
+
 routes(["list"]) ->
-    if_could_print(route, fun print/1);
+    Routes = emqttd_router:dump(),
+    foreach(fun print/1, Routes);
 
 routes(["show", Topic]) ->
-    print(mnesia:dirty_read(route, bin(Topic)));
+    Routes = lists:append(ets:lookup(mqtt_route, bin(Topic)),
+                          ets:lookup(mqtt_local_route, bin(Topic))),
+    foreach(fun print/1, Routes);
 
 routes(_) ->
     ?USAGE([{"routes list",         "List all routes"},
@@ -210,68 +228,65 @@ routes(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Topics Command
+
 topics(["list"]) ->
-    if_could_print(topic, fun print/1);
+    lists:foreach(fun(Topic) -> ?PRINT("~s~n", [Topic]) end, emqttd:topics());
 
 topics(["show", Topic]) ->
-    print(mnesia:dirty_read(topic, bin(Topic)));
+    print(mnesia:dirty_read(mqtt_route, bin(Topic)));
 
 topics(_) ->
     ?USAGE([{"topics list",         "List all topics"},
             {"topics show <Topic>", "Show a topic"}]).
 
 subscriptions(["list"]) ->
-    if_could_print(subscription, fun print/1);
-
-subscriptions(["list", "static"]) ->
-    if_could_print(backend_subscription, fun print/1);
+    lists:foreach(fun(Subscription) ->
+                      print(subscription, Subscription)
+                  end, ets:tab2list(mqtt_subscription));
 
 subscriptions(["show", ClientId]) ->
-    case mnesia:dirty_read(subscription, bin(ClientId)) of
-        []      -> ?PRINT_MSG("Not Found.~n");
-        Records -> print(Records)
+    case emqttd:subscriptions(bin(ClientId)) of
+        [] ->
+            ?PRINT_MSG("Not Found.~n");
+        Subscriptions ->
+            [print(subscription, Sub) || Sub <- Subscriptions]
     end;
 
 subscriptions(["add", ClientId, Topic, QoS]) ->
-    Add = fun(IntQos) ->
-            Subscription = #mqtt_subscription{subid = bin(ClientId),
-                                              topic = bin(Topic),
-                                              qos   = IntQos},
-            case emqttd_backend:add_subscription(Subscription) of
-                ok ->
-                    ?PRINT_MSG("ok~n");
-                {error, already_existed} ->
-                    ?PRINT_MSG("Error: already existed~n");
-                {error, Reason} ->
-                    ?PRINT("Error: ~p~n", [Reason])
-            end
-          end,
-    if_valid_qos(QoS, Add);
-
-subscriptions(["del", ClientId]) ->
-    Ok = emqttd_backend:del_subscriptions(bin(ClientId)),
-    ?PRINT("~p~n", [Ok]);
+   if_valid_qos(QoS, fun(IntQos) ->
+                        case emqttd_sm:lookup_session(bin(ClientId)) of
+                            undefined ->
+                                ?PRINT_MSG("Error: Session not found!");
+                            #mqtt_session{sess_pid = SessPid} ->
+                                {Topic1, Options} = emqttd_topic:parse(bin(Topic)),
+                                emqttd_session:subscribe(SessPid, [{Topic1, [{qos, IntQos}|Options]}]),
+                                ?PRINT_MSG("ok~n")
+                        end
+                     end);
 
 subscriptions(["del", ClientId, Topic]) ->
-    Ok = emqttd_backend:del_subscription(bin(ClientId), bin(Topic)),
-    ?PRINT("~p~n", [Ok]);
+    case emqttd_sm:lookup_session(bin(ClientId)) of
+        undefined ->
+            ?PRINT_MSG("Error: Session not found!");
+        #mqtt_session{sess_pid = SessPid} ->
+            emqttd_session:unsubscribe(SessPid, [emqttd_topic:parse(bin(Topic))]),
+            ?PRINT_MSG("ok~n")
+    end;
 
 subscriptions(_) ->
     ?USAGE([{"subscriptions list",                         "List all subscriptions"},
-            {"subscriptions list static",                  "List all static subscriptions"},
             {"subscriptions show <ClientId>",              "Show subscriptions of a client"},
             {"subscriptions add <ClientId> <Topic> <QoS>", "Add a static subscription manually"},
-            {"subscriptions del <ClientId>",               "Delete static subscriptions manually"},
             {"subscriptions del <ClientId> <Topic>",       "Delete a static subscription manually"}]).
 
-if_could_print(Tab, Fun) ->
-    case mnesia:table_info(Tab, size) of
-        Size when Size >= ?MAX_LIMIT ->
-            ?PRINT("Could not list, too many ~ss: ~p~n", [Tab, Size]);
-        _Size ->
-            Keys = mnesia:dirty_all_keys(Tab),
-            foreach(fun(Key) -> Fun(ets:lookup(Tab, Key)) end, Keys)
-    end.
+% if_could_print(Tab, Fun) ->
+%    case mnesia:table_info(Tab, size) of
+%        Size when Size >= ?MAX_LIMIT ->
+%            ?PRINT("Could not list, too many ~ss: ~p~n", [Tab, Size]);
+%        _Size ->
+%            Keys = mnesia:dirty_all_keys(Tab),
+%            foreach(fun(Key) -> Fun(ets:lookup(Tab, Key)) end, Keys)
+%    end.
 
 if_valid_qos(QoS, Fun) ->
     try list_to_integer(QoS) of
@@ -307,35 +322,35 @@ plugins(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Bridges command
+
 bridges(["list"]) ->
-    foreach(fun({{Node, Topic}, _Pid}) ->
+    foreach(fun({Node, Topic, _Pid}) ->
                 ?PRINT("bridge: ~s--~s-->~s~n", [node(), Topic, Node])
-            end, emqttd_bridge_sup:bridges());
+            end, emqttd_bridge_sup_sup:bridges());
 
 bridges(["options"]) ->
     ?PRINT_MSG("Options:~n"),
-    ?PRINT_MSG("  qos     = 0 | 1 | 2~n"),
     ?PRINT_MSG("  prefix  = string~n"),
     ?PRINT_MSG("  suffix  = string~n"),
     ?PRINT_MSG("  queue   = integer~n"),
     ?PRINT_MSG("Example:~n"),
-    ?PRINT_MSG("  qos=2,prefix=abc/,suffix=/yxz,queue=1000~n");
+    ?PRINT_MSG("  prefix=abc/,suffix=/yxz,queue=1000~n");
 
 bridges(["start", SNode, Topic]) ->
-    case emqttd_bridge_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
+    case emqttd_bridge_sup_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
         {ok, _}        -> ?PRINT_MSG("bridge is started.~n");
         {error, Error} -> ?PRINT("error: ~p~n", [Error])
     end;
 
 bridges(["start", SNode, Topic, OptStr]) ->
     Opts = parse_opts(bridge, OptStr),
-    case emqttd_bridge_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic), Opts) of
+    case emqttd_bridge_sup_sup:start_bridge(list_to_atom(SNode), list_to_binary(Topic), Opts) of
         {ok, _}        -> ?PRINT_MSG("bridge is started.~n");
         {error, Error} -> ?PRINT("error: ~p~n", [Error])
     end;
 
 bridges(["stop", SNode, Topic]) ->
-    case emqttd_bridge_sup:stop_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
+    case emqttd_bridge_sup_sup:stop_bridge(list_to_atom(SNode), list_to_binary(Topic)) of
         ok             -> ?PRINT_MSG("bridge is stopped.~n");
         {error, Error} -> ?PRINT("error: ~p~n", [Error])
     end;
@@ -351,8 +366,6 @@ parse_opts(Cmd, OptStr) ->
     Tokens = string:tokens(OptStr, ","),
     [parse_opt(Cmd, list_to_atom(Opt), Val)
         || [Opt, Val] <- [string:tokens(S, "=") || S <- Tokens]].
-parse_opt(bridge, qos, Qos) ->
-    {qos, list_to_integer(Qos)};
 parse_opt(bridge, suffix, Suffix) ->
     {topic_suffix, bin(Suffix)};
 parse_opt(bridge, prefix, Prefix) ->
@@ -364,6 +377,7 @@ parse_opt(_Cmd, Opt, _Val) ->
 
 %%--------------------------------------------------------------------
 %% @doc vm command
+
 vm([]) ->
     vm(["all"]);
 
@@ -402,6 +416,7 @@ vm(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc mnesia Command
+
 mnesia([]) ->
     mnesia:system_info();
 
@@ -410,6 +425,7 @@ mnesia(_) ->
 
 %%--------------------------------------------------------------------
 %% @doc Trace Command
+
 trace(["list"]) ->
     foreach(fun({{Who, Name}, LogFile}) ->
                 ?PRINT("trace ~s ~s -> ~s~n", [Who, Name, LogFile])
@@ -452,6 +468,7 @@ trace_off(Who, Name) ->
 
 %%--------------------------------------------------------------------
 %% @doc Listeners Command
+
 listeners([]) ->
     foreach(fun({{Protocol, ListenOn}, Pid}) ->
                 Info = [{acceptors,      esockd:get_acceptors(Pid)},
@@ -464,8 +481,34 @@ listeners([]) ->
                         end, Info)
             end, esockd:listeners());
 
+listeners(["restart", Proto, ListenOn]) ->
+    ListenOn1 = case string:tokens(ListenOn, ":") of
+        [Port]     -> list_to_integer(Port);
+        [IP, Port] -> {IP, list_to_integer(Port)}
+    end,
+    case emqttd_app:restart_listener({list_to_atom(Proto), ListenOn1, []}) of
+        {ok, _Pid} ->
+            io:format("Restart ~s listener on ~s successfully.~n", [Proto, ListenOn]);
+        {error, Error} ->
+            io:format("Failed to restart ~s listener on ~s, error:~p~n", [Proto, ListenOn, Error])
+    end;
+
+listeners(["stop", Proto, ListenOn]) ->
+    ListenOn1 = case string:tokens(ListenOn, ":") of
+        [Port]     -> list_to_integer(Port);
+        [IP, Port] -> {IP, list_to_integer(Port)}
+    end,
+    case emqttd_app:stop_listener({list_to_atom(Proto), ListenOn1, []}) of
+        ok ->
+            io:format("Stop ~s listener on ~s successfully.~n", [Proto, ListenOn]);
+        {error, Error} ->
+            io:format("Failed to stop ~s listener on ~s, error:~p~n", [Proto, ListenOn, Error])
+    end;
+
 listeners(_) ->
-    ?PRINT_CMD("listeners", "List listeners").
+    ?USAGE([{"listeners",                        "List listeners"},
+            {"listeners restart <Proto> <Port>", "Restart a listener"},
+            {"listeners stop    <Proto> <Port>", "Stop a listener"}]).
 
 %%--------------------------------------------------------------------
 %% Dump ETS
@@ -491,13 +534,13 @@ print(Routes = [#mqtt_route{topic = Topic} | _]) ->
     Nodes = [atom_to_list(Node) || #mqtt_route{node = Node} <- Routes],
     ?PRINT("~s -> ~s~n", [Topic, string:join(Nodes, ",")]);
 
-print(Subscriptions = [#mqtt_subscription{subid = ClientId} | _]) ->
-    TopicTable = [io_lib:format("~s:~w", [Topic, Qos])
-                  || #mqtt_subscription{topic = Topic, qos = Qos} <- Subscriptions],
-    ?PRINT("~s -> ~s~n", [ClientId, string:join(TopicTable, ",")]);
+%% print(Subscriptions = [#mqtt_subscription{subid = ClientId} | _]) ->
+%%    TopicTable = [io_lib:format("~s:~w", [Topic, Qos])
+%%                  || #mqtt_subscription{topic = Topic, qos = Qos} <- Subscriptions],
+%%    ?PRINT("~s -> ~s~n", [ClientId, string:join(TopicTable, ",")]);
 
-print(Topics = [#mqtt_topic{}|_]) ->
-    foreach(fun print/1, Topics);
+%% print(Topics = [#mqtt_topic{}|_]) ->
+%%    foreach(fun print/1, Topics);
 
 print(#mqtt_plugin{name = Name, version = Ver, descr = Descr, active = Active}) ->
     ?PRINT("Plugin(~s, version=~s, description=~s, active=~s)~n",
@@ -507,32 +550,58 @@ print(#mqtt_client{client_id = ClientId, clean_sess = CleanSess, username = User
                    peername = Peername, connected_at = ConnectedAt}) ->
     ?PRINT("Client(~s, clean_sess=~s, username=~s, peername=~s, connected_at=~p)~n",
            [ClientId, CleanSess, Username, emqttd_net:format(Peername),
-            emqttd_time:now_to_secs(ConnectedAt)]);
+            emqttd_time:now_secs(ConnectedAt)]);
 
-print(#mqtt_topic{topic = Topic, flags = Flags}) ->
-    ?PRINT("~s: ~s~n", [Topic, string:join([atom_to_list(F) || F <- Flags], ",")]);
-
+%% print(#mqtt_topic{topic = Topic, flags = Flags}) ->
+%%    ?PRINT("~s: ~s~n", [Topic, string:join([atom_to_list(F) || F <- Flags], ",")]);
+print({route, Routes}) ->
+    foreach(fun print/1, Routes);
+print({local_route, Routes}) ->
+    foreach(fun print/1, Routes);
 print(#mqtt_route{topic = Topic, node = Node}) ->
     ?PRINT("~s -> ~s~n", [Topic, Node]);
+print({Topic, Node}) ->
+    ?PRINT("~s -> ~s~n", [Topic, Node]);
 
-print({{ClientId, _ClientPid}, SessInfo}) ->
-    InfoKeys = [clean_sess, 
+print({ClientId, _ClientPid, _Persistent, SessInfo}) ->
+    Data = lists:append(SessInfo, emqttd_stats:get_session_stats(ClientId)),
+    InfoKeys = [clean_sess,
+                subscriptions,
                 max_inflight,
-                inflight_queue,
-                message_queue,
-                message_dropped,
-                awaiting_rel,
-                awaiting_ack,
-                awaiting_comp,
+                inflight_len,
+                mqueue_len,
+                mqueue_dropped,
+                awaiting_rel_len,
+                deliver_msg,
+                enqueue_msg,
                 created_at],
-    ?PRINT("Session(~s, clean_sess=~s, max_inflight=~w, inflight_queue=~w, "
-           "message_queue=~w, message_dropped=~w, "
-           "awaiting_rel=~w, awaiting_ack=~w, awaiting_comp=~w, "
-           "created_at=~w)~n",
-            [ClientId | [format(Key, get_value(Key, SessInfo)) || Key <- InfoKeys]]).
+    ?PRINT("Session(~s, clean_sess=~s, subscriptions=~w, max_inflight=~w, inflight=~w, "
+           "mqueue_len=~w, mqueue_dropped=~w, awaiting_rel=~w, "
+           "deliver_msg=~w, enqueue_msg=~w, created_at=~w)~n",
+            [ClientId | [format(Key, get_value(Key, Data)) || Key <- InfoKeys]]).
+
+print(subscription, {Sub, {share, _Share, Topic}}) when is_pid(Sub) ->
+    ?PRINT("~p -> ~s~n", [Sub, Topic]);
+print(subscription, {Sub, Topic}) when is_pid(Sub) ->
+    ?PRINT("~p -> ~s~n", [Sub, Topic]);
+print(subscription, {{SubId, SubPid}, {share, _Share, Topic}})
+    when is_binary(SubId), is_pid(SubPid) ->
+    ?PRINT("~s~p -> ~s~n", [SubId, SubPid, Topic]);
+print(subscription, {{SubId, SubPid}, Topic})
+    when is_binary(SubId), is_pid(SubPid) ->
+    ?PRINT("~s~p -> ~s~n", [SubId, SubPid, Topic]);
+print(subscription, {Sub, Topic, Props}) ->
+    print(subscription, {Sub, Topic}),
+    lists:foreach(fun({K, V}) when is_binary(V) ->
+                      ?PRINT("  ~-8s: ~s~n", [K, V]);
+                     ({K, V}) ->
+                      ?PRINT("  ~-8s: ~w~n", [K, V]);
+                     (K) ->
+                      ?PRINT("  ~-8s: true~n", [K])
+                  end, Props).
 
 format(created_at, Val) ->
-    emqttd_time:now_to_secs(Val);
+    emqttd_time:now_secs(Val);
 
 format(_, Val) ->
     Val.

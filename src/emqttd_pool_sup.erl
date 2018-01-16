@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 %% @doc Common Pool Supervisor
 -module(emqttd_pool_sup).
+
+-author("Feng Lee <feng@emqtt.io>").
 
 -behaviour(supervisor).
 
@@ -34,17 +36,17 @@ spec(ChildId, Args) ->
     {ChildId, {?MODULE, start_link, Args},
         transient, infinity, supervisor, [?MODULE]}.
 
--spec(start_link(atom(), atom(), mfa()) -> {ok, pid()} | {error, any()}).
+-spec(start_link(atom() | tuple(), atom(), mfa()) -> {ok, pid()} | {error, term()}).
 start_link(Pool, Type, MFA) ->
     Schedulers = erlang:system_info(schedulers),
     start_link(Pool, Type, Schedulers, MFA).
 
--spec(start_link(atom(), atom(), pos_integer(), mfa()) -> {ok, pid()} | {error, any()}).
+-spec(start_link(atom(), atom(), pos_integer(), mfa()) -> {ok, pid()} | {error, term()}).
 start_link(Pool, Type, Size, MFA) ->
-    supervisor:start_link({local, sup_name(Pool)}, ?MODULE, [Pool, Type, Size, MFA]).
+    supervisor:start_link(?MODULE, [Pool, Type, Size, MFA]).
 
-sup_name(Pool) when is_atom(Pool) ->
-    list_to_atom(atom_to_list(Pool) ++ "_pool_sup").
+%% sup_name(Pool) when is_atom(Pool) ->
+%%    list_to_atom(atom_to_list(Pool) ++ "_pool_sup").
 
 init([Pool, Type, Size, {M, F, Args}]) ->
     ensure_pool(Pool, Type, [{size, Size}]),

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,9 +27,9 @@
 %% @doc Start websocket client supervisor
 -spec(start_link() -> {ok, pid()}).
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [emqttd:env(mqtt)]).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-%% @doc Start a WebSocket Client
+%% @doc Start a WebSocket Connection.
 -spec(start_client(pid(), mochiweb_request:request(), fun()) -> {ok, pid()}).
 start_client(WsPid, Req, ReplyChannel) ->
     supervisor:start_child(?MODULE, [WsPid, Req, ReplyChannel]).
@@ -38,7 +38,8 @@ start_client(WsPid, Req, ReplyChannel) ->
 %% Supervisor callbacks
 %%--------------------------------------------------------------------
 
-init([Env]) ->
+init([]) ->
+    Env = lists:append(emqttd:env(client, []), emqttd:env(protocol, [])),
     {ok, {{simple_one_for_one, 0, 1},
            [{ws_client, {emqttd_ws_client, start_link, [Env]},
              temporary, 5000, worker, [emqttd_ws_client]}]}}.

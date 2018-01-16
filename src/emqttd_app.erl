@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,41 +18,33 @@
 
 -behaviour(application).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -include("emqttd_cli.hrl").
+
+-include("emqttd_protocol.hrl").
 
 %% Application callbacks
 -export([start/2, stop/1]).
 
--export([start_listener/1, stop_listener/1, is_mod_enabled/1]).
+-export([start_listener/1, stop_listener/1, restart_listener/1]).
 
-%% MQTT SockOpts
--define(MQTT_SOCKOPTS, [
-        binary,
-        {packet,    raw},
-        {reuseaddr, true},
-        {backlog,   512},
-        {nodelay,   true}]).
+-type(listener() :: {atom(), esockd:listen_on(), [esockd:option()]}).
 
--type listener() :: {atom(), esockd:listen_on(), [esockd:option()]}.
+-define(APP, emqttd).
 
 %%--------------------------------------------------------------------
-%% Application callbacks
+%% Application Callbacks
 %%--------------------------------------------------------------------
 
--spec(start(StartType, StartArgs) -> {ok, pid()} | {ok, pid(), State} | {error, Reason} when
-      StartType :: normal | {takeover, node()} | {failover, node()},
-      StartArgs :: term(),
-      State     :: term(),
-      Reason    :: term()).
-start(_StartType, _StartArgs) ->
+start(_Type, _Args) ->
     print_banner(),
-    emqttd_mnesia:start(),
+    ekka:start(),
     {ok, Sup} = emqttd_sup:start_link(),
     start_servers(Sup),
     emqttd_cli:load(),
-    load_all_mods(),
-    emqttd_plugins:load(),
-    start_listeners(),
+    register_acl_mod(),
+    start_autocluster(),
     register(emqttd, self()),
     print_vsn(),
     {ok, Sup}.
@@ -66,12 +58,11 @@ stop(_State) ->
 %%--------------------------------------------------------------------
 
 print_banner() ->
-    ?PRINT("starting emqttd on node '~s'~n", [node()]).
+    ?PRINT("starting ~s on node '~s'~n", [?APP, node()]).
 
 print_vsn() ->
     {ok, Vsn} = application:get_key(vsn),
-    {ok, Desc} = application:get_key(description),
-    ?PRINT("~s ~s is running now~n", [Desc, Vsn]).
+    ?PRINT("~s ~s is running now~n", [?APP, Vsn]).
 
 %%--------------------------------------------------------------------
 %% Start Servers
@@ -79,11 +70,11 @@ print_vsn() ->
 
 start_servers(Sup) ->
     Servers = [{"emqttd ctl", emqttd_ctl},
-               {"emqttd hook", emqttd_hook},
+               {"emqttd hook", emqttd_hooks},
+               {"emqttd router", emqttd_router},
                {"emqttd pubsub", {supervisor, emqttd_pubsub_sup}},
                {"emqttd stats", emqttd_stats},
                {"emqttd metrics", emqttd_metrics},
-               {"emqttd retainer", emqttd_retainer},
                {"emqttd pooler", {supervisor, emqttd_pooler}},
                {"emqttd trace", {supervisor, emqttd_trace_sup}},
                {"emqttd client manager", {supervisor, emqttd_cm_sup}},
@@ -93,7 +84,7 @@ start_servers(Sup) ->
                {"emqttd broker", emqttd_broker},
                {"emqttd alarm", emqttd_alarm},
                {"emqttd mod supervisor", emqttd_mod_sup},
-               {"emqttd bridge supervisor", {supervisor, emqttd_bridge_sup}},
+               {"emqttd bridge supervisor", {supervisor, emqttd_bridge_sup_sup}},
                {"emqttd access control", emqttd_access_control},
                {"emqttd system monitor", {supervisor, emqttd_sysmon_sup}}],
     [start_server(Sup, Server) || Server <- Servers].
@@ -101,17 +92,17 @@ start_servers(Sup) ->
 start_server(_Sup, {Name, F}) when is_function(F) ->
     ?PRINT("~s is starting...", [Name]),
     F(),
-    ?PRINT_MSG("[done]~n");
+    ?PRINT_MSG("[ok]~n");
 
 start_server(Sup, {Name, Server}) ->
     ?PRINT("~s is starting...", [Name]),
     start_child(Sup, Server),
-    ?PRINT_MSG("[done]~n");
+    ?PRINT_MSG("[ok]~n");
 
 start_server(Sup, {Name, Server, Opts}) ->
     ?PRINT("~s is starting...", [ Name]),
     start_child(Sup, Server, Opts),
-    ?PRINT_MSG("[done]~n").
+    ?PRINT_MSG("[ok]~n").
 
 start_child(Sup, {supervisor, Module}) ->
     supervisor:start_child(Sup, supervisor_spec(Module));
@@ -144,24 +135,28 @@ worker_spec(M, F, A) ->
     {M, {M, F, A}, permanent, 10000, worker, [M]}.
 
 %%--------------------------------------------------------------------
-%% Load Modules
+%% Register default ACL File
 %%--------------------------------------------------------------------
 
-%% @doc load all modules
-load_all_mods() ->
-    lists:foreach(fun load_mod/1, emqttd:env(modules)).
-
-load_mod({Name, Opts}) ->
-    Mod = list_to_atom("emqttd_mod_" ++ atom_to_list(Name)),
-    case catch Mod:load(Opts) of
-        ok               -> lager:info("Load module ~s successfully", [Name]);
-        {error, Error}   -> lager:error("Load module ~s error: ~p", [Name, Error]);
-        {'EXIT', Reason} -> lager:error("Load module ~s error: ~p", [Name, Reason])
+register_acl_mod() ->
+    case emqttd:env(acl_file) of
+        {ok, File} -> emqttd_access_control:register_mod(acl, emqttd_acl_internal, [File]);
+        undefined  -> ok
     end.
 
-%% @doc Is module enabled?
--spec(is_mod_enabled(Name :: atom()) -> boolean()).
-is_mod_enabled(Name) -> emqttd:env(modules, Name) =/= undefined.
+%%--------------------------------------------------------------------
+%% Autocluster
+%%--------------------------------------------------------------------
+
+start_autocluster() ->
+    ekka:callback(prepare, fun emqttd:shutdown/1),
+    ekka:callback(reboot,  fun emqttd:reboot/0),
+    ekka:autocluster(?APP, fun after_autocluster/0).
+
+after_autocluster() ->
+    emqttd_plugins:init(),
+    emqttd_plugins:load(),
+    start_listeners().
 
 %%--------------------------------------------------------------------
 %% Start Listeners
@@ -169,39 +164,79 @@ is_mod_enabled(Name) -> emqttd:env(modules, Name) =/= undefined.
 
 %% @doc Start Listeners of the broker.
 -spec(start_listeners() -> any()).
-start_listeners() -> lists:foreach(fun start_listener/1, emqttd:env(listeners)).
+start_listeners() -> lists:foreach(fun start_listener/1, emqttd:env(listeners, [])).
 
 %% Start mqtt listener
 -spec(start_listener(listener()) -> any()).
-start_listener({mqtt, ListenOn, Opts}) -> start_listener(mqtt, ListenOn, Opts);
+start_listener({tcp, ListenOn, Opts}) ->
+    start_listener('mqtt:tcp', ListenOn, Opts);
 
 %% Start mqtt(SSL) listener
-start_listener({mqtts, ListenOn, Opts}) -> start_listener(mqtts, ListenOn, Opts);
+start_listener({ssl, ListenOn, Opts}) ->
+    start_listener('mqtt:ssl', ListenOn, Opts);
 
 %% Start http listener
-start_listener({http, ListenOn, Opts}) ->
-    mochiweb:start_http(http, ListenOn, Opts, {emqttd_http, handle_request, []});
+start_listener({Proto, ListenOn, Opts}) when Proto == http; Proto == ws ->
+    mochiweb:start_http('mqtt:ws', ListenOn, Opts, {emqttd_ws, handle_request, []});
 
 %% Start https listener
-start_listener({https, ListenOn, Opts}) ->
-    mochiweb:start_http(https, ListenOn, Opts, {emqttd_http, handle_request, []}).
+start_listener({Proto, ListenOn, Opts}) when Proto == https; Proto == wss ->
+    mochiweb:start_http('mqtt:wss', ListenOn, Opts, {emqttd_ws, handle_request, []});
 
-start_listener(Protocol, ListenOn, Opts) ->
-    MFArgs = {emqttd_client, start_link, [emqttd:env(mqtt)]},
-    {ok, _} = esockd:open(Protocol, ListenOn, merge_sockopts(Opts), MFArgs).
+start_listener({Proto, ListenOn, Opts}) when Proto == api ->
+    mochiweb:start_http('mqtt:api', ListenOn, Opts, emqttd_http:http_handler()).
+
+start_listener(Proto, ListenOn, Opts) ->
+    Env = lists:append(emqttd:env(client, []), emqttd:env(protocol, [])),
+    MFArgs = {emqttd_client, start_link, [Env]},
+    {ok, _} = esockd:open(Proto, ListenOn, merge_sockopts(Opts), MFArgs).
 
 merge_sockopts(Options) ->
-    SockOpts = emqttd_opts:merge(?MQTT_SOCKOPTS,
-                                 proplists:get_value(sockopts, Options, [])),
-    emqttd_opts:merge(Options, [{sockopts, SockOpts}]).
+    SockOpts = emqttd_misc:merge_opts(
+                 ?MQTT_SOCKOPTS, proplists:get_value(sockopts, Options, [])),
+    emqttd_misc:merge_opts(Options, [{sockopts, SockOpts}]).
 
 %%--------------------------------------------------------------------
 %% Stop Listeners
 %%--------------------------------------------------------------------
 
 %% @doc Stop Listeners
-stop_listeners() -> lists:foreach(fun stop_listener/1, emqttd:env(listeners)).
+stop_listeners() -> lists:foreach(fun stop_listener/1, emqttd:env(listeners, [])).
 
 %% @private
-stop_listener({Protocol, ListenOn, _Opts}) -> esockd:close(Protocol, ListenOn).
+stop_listener({tcp, ListenOn, _Opts}) ->
+    esockd:close('mqtt:tcp', ListenOn);
+stop_listener({ssl, ListenOn, _Opts}) ->
+    esockd:close('mqtt:ssl', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) when Proto == http; Proto == ws ->
+    mochiweb:stop_http('mqtt:ws', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) when Proto == https; Proto == wss ->
+    mochiweb:stop_http('mqtt:wss', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) when Proto == api ->
+    mochiweb:stop_http('mqtt:api', ListenOn);
+stop_listener({Proto, ListenOn, _Opts}) ->
+    esockd:close(Proto, ListenOn).
+
+%% @doc Restart Listeners
+restart_listener({tcp, ListenOn, _Opts}) ->
+    esockd:reopen('mqtt:tcp', ListenOn);
+restart_listener({ssl, ListenOn, _Opts}) ->
+    esockd:reopen('mqtt:ssl', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == http; Proto == ws ->
+    mochiweb:restart_http('mqtt:ws', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == https; Proto == wss ->
+    mochiweb:restart_http('mqtt:wss', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) when Proto == api ->
+    mochiweb:restart_http('mqtt:api', ListenOn);
+restart_listener({Proto, ListenOn, _Opts}) ->
+    esockd:reopen(Proto, ListenOn).
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+merge_sockopts_test_() ->
+    Opts =  [{acceptors, 16}, {max_clients, 512}],
+    ?_assert(merge_sockopts(Opts) == [{sockopts, ?MQTT_SOCKOPTS} | Opts]).
+
+-endif.
 

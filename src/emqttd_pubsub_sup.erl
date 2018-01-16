@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,11 +17,9 @@
 %% @doc PubSub Supervisor.
 -module(emqttd_pubsub_sup).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -behaviour(supervisor).
-
--include("emqttd.hrl").
-
--define(CONCURRENCY_OPTS, [{read_concurrency, true}, {write_concurrency, true}]).
 
 %% API
 -export([start_link/0, pubsub_pool/0]).
@@ -29,48 +27,60 @@
 %% Supervisor callbacks
 -export([init/1]).
 
+-define(CONCURRENCY_OPTS, [{read_concurrency, true}, {write_concurrency, true}]).
+
+%%--------------------------------------------------------------------
+%% API
+%%--------------------------------------------------------------------
+
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [emqttd_broker:env(pubsub)]).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 pubsub_pool() ->
-    hd([Pid|| {pubsub_pool, Pid, _, _} <- supervisor:which_children(?MODULE)]).
+    hd([Pid || {pubsub_pool, Pid, _, _} <- supervisor:which_children(?MODULE)]).
 
-init([Env]) ->
+%%--------------------------------------------------------------------
+%% Supervisor Callbacks
+%%--------------------------------------------------------------------
 
-    %% Create ETS Tabs
-    create_tab(subscriber), create_tab(subscribed),
+init([]) ->
+    {ok, Env} = emqttd:env(pubsub),
+    %% Create ETS Tables
+    [create_tab(Tab) || Tab <- [mqtt_subproperty, mqtt_subscriber, mqtt_subscription]],
+    {ok, { {one_for_all, 10, 3600}, [pool_sup(pubsub, Env), pool_sup(server, Env)]} }.
 
-    %% Router
-    Router = {router, {emqttd_router, start_link, []},
-                permanent, 5000, worker, [emqttd_router]},
-
-    %% PubSub Pool Sup
-    PubSubMFA = {emqttd_pubsub, start_link, [Env]},
-    PubSubPoolSup = emqttd_pool_sup:spec(pubsub_pool, [pubsub, hash, pool_size(Env), PubSubMFA]),
-
-    %% Server Pool Sup
-    ServerMFA = {emqttd_server, start_link, [Env]},
-    ServerPoolSup = emqttd_pool_sup:spec(server_pool, [server, hash, pool_size(Env), ServerMFA]),
-
-    {ok, {{one_for_all, 5, 60}, [Router, PubSubPoolSup, ServerPoolSup]}}.
+%%--------------------------------------------------------------------
+%% Pool
+%%--------------------------------------------------------------------
 
 pool_size(Env) ->
     Schedulers = erlang:system_info(schedulers),
     proplists:get_value(pool_size, Env, Schedulers).
 
-create_tab(subscriber) ->
-    %% subscriber: Topic -> Pid1, Pid2, ..., PidN
-    %% duplicate_bag: o(1) insert
-    ensure_tab(subscriber, [public, named_table, duplicate_bag | ?CONCURRENCY_OPTS]);
+pool_sup(Name, Env) ->
+    Pool = list_to_atom(atom_to_list(Name) ++ "_pool"),
+    Mod = list_to_atom("emqttd_" ++ atom_to_list(Name)),
+    MFA = {Mod, start_link, [Env]},
+    emqttd_pool_sup:spec(Pool, [Name, hash, pool_size(Env), MFA]).
 
-create_tab(subscribed) ->
-    %% subscribed: Pid -> Topic1, Topic2, ..., TopicN
+%%--------------------------------------------------------------------
+%% Create PubSub Tables
+%%--------------------------------------------------------------------
+
+create_tab(mqtt_subproperty) ->
+    %% Subproperty: {Topic, Sub} -> [{qos, 1}]
+    ensure_tab(mqtt_subproperty, [public, named_table, set | ?CONCURRENCY_OPTS]);
+
+create_tab(mqtt_subscriber) ->
+    %% Subscriber: Topic -> Sub1, Sub2, Sub3, ..., SubN
+    %% duplicate_bag: o(1) insert
+    ensure_tab(mqtt_subscriber, [public, named_table, duplicate_bag | ?CONCURRENCY_OPTS]);
+
+create_tab(mqtt_subscription) ->
+    %% Subscription: Sub -> Topic1, Topic2, Topic3, ..., TopicN
     %% bag: o(n) insert
-    ensure_tab(subscribed, [public, named_table, bag | ?CONCURRENCY_OPTS]).
+    ensure_tab(mqtt_subscription, [public, named_table, bag | ?CONCURRENCY_OPTS]).
 
 ensure_tab(Tab, Opts) ->
-    case ets:info(Tab, name) of
-        undefined -> ets:new(Tab, Opts);
-        _ -> ok
-    end.
+    case ets:info(Tab, name) of undefined -> ets:new(Tab, Opts); _ -> ok end.
 

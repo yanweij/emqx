@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,7 +18,10 @@
 
 -behaviour(emqttd_acl_mod).
 
+-author("Feng Lee <feng@emqtt.io>").
+
 -include("emqttd.hrl").
+-include("emqttd_cli.hrl").
 
 -export([all_rules/0]).
 
@@ -27,7 +30,7 @@
 
 -define(ACL_RULE_TAB, mqtt_acl_rule).
 
--record(state, {acl_file, nomatch = allow}).
+-record(state, {config}).
 
 %%--------------------------------------------------------------------
 %% API
@@ -46,16 +49,14 @@ all_rules() ->
 %%--------------------------------------------------------------------
 
 %% @doc Init internal ACL
--spec(init(AclOpts :: list()) -> {ok, State :: any()}).
-init(AclOpts) ->
+-spec(init([File :: string()]) -> {ok, State :: any()}).
+init([File]) ->
     ets:new(?ACL_RULE_TAB, [set, public, named_table, {read_concurrency, true}]),
-    AclFile = proplists:get_value(file, AclOpts),
-    Default = proplists:get_value(nomatch, AclOpts, allow),
-    State = #state{acl_file = AclFile, nomatch = Default},
+    State = #state{config = File},
     true = load_rules_from_file(State),
     {ok, State}.
 
-load_rules_from_file(#state{acl_file = AclFile}) ->
+load_rules_from_file(#state{config = AclFile}) ->
     {ok, Terms} = file:consult(AclFile),
     Rules = [emqttd_access_rule:compile(Term) || Term <- Terms],
     lists:foreach(fun(PubSub) ->
@@ -83,11 +84,13 @@ filter(_PubSub, {_AllowDeny, _Who, _, _Topics}) ->
       PubSub :: pubsub(),
       Topic  :: binary(),
       State  :: #state{}).
-check_acl({Client, PubSub, Topic}, #state{nomatch = Default}) ->
+check_acl(_Who, #state{config = undefined}) ->
+    allow;
+check_acl({Client, PubSub, Topic}, #state{}) ->
     case match(Client, Topic, lookup(PubSub)) of
         {matched, allow} -> allow;
         {matched, deny}  -> deny;
-        nomatch          -> Default
+        nomatch          -> ignore
     end.
 
 lookup(PubSub) ->
@@ -107,13 +110,16 @@ match(Client, Topic, [Rule|Rules]) ->
 
 %% @doc Reload ACL
 -spec(reload_acl(State :: #state{}) -> ok | {error, Reason :: any()}).
+reload_acl(#state{config = undefined}) ->
+    ok;
 reload_acl(State) ->
     case catch load_rules_from_file(State) of
         {'EXIT', Error} -> {error, Error};
-        _ -> ok
+        true -> ?PRINT("~s~n", ["reload acl_internal successfully"]), ok
     end.
 
 %% @doc ACL Module Description
 -spec(description() -> string()).
-description() -> "Internal ACL with etc/acl.config".
+description() ->
+    "Internal ACL with etc/acl.conf".
 

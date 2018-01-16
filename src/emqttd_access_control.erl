@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
+%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,29 +16,25 @@
 
 -module(emqttd_access_control).
 
--include("emqttd.hrl").
-
 -behaviour(gen_server).
 
--define(SERVER, ?MODULE).
+-author("Feng Lee <feng@emqtt.io>").
+
+-include("emqttd.hrl").
 
 %% API Function Exports
--export([start_link/0, start_link/1,
-         auth/2,       % authentication
-         check_acl/3,  % acl check
-         reload_acl/0, % reload acl
-         lookup_mods/1,
-         register_mod/3, register_mod/4,
-         unregister_mod/2,
-         stop/0]).
+-export([start_link/0, auth/2, check_acl/3, reload_acl/0, lookup_mods/1,
+         register_mod/3, register_mod/4, unregister_mod/2, stop/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-define(SERVER, ?MODULE).
+
 -define(ACCESS_CONTROL_TAB, mqtt_access_control).
 
--type password() :: undefined | binary().
+-type(password() :: undefined | binary()).
 
 -record(state, {}).
 
@@ -47,22 +43,23 @@
 %%--------------------------------------------------------------------
 
 %% @doc Start access control server.
--spec(start_link() -> {ok, pid()} | ignore | {error, any()}).
-start_link() -> start_link(emqttd:env(access)).
-
--spec(start_link(Opts :: list()) -> {ok, pid()} | ignore | {error, any()}).
-start_link(Opts) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [Opts], []).
+-spec(start_link() -> {ok, pid()} | ignore | {error, term()}).
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% @doc Authenticate MQTT Client.
--spec(auth(Client :: mqtt_client(), Password :: password()) -> ok | {error, any()}).
+-spec(auth(Client :: mqtt_client(), Password :: password()) -> ok | {ok, boolean()} | {error, term()}).
 auth(Client, Password) when is_record(Client, mqtt_client) ->
     auth(Client, Password, lookup_mods(auth)).
 auth(_Client, _Password, []) ->
-    {error, "No auth module to check!"};
+    case emqttd:env(allow_anonymous, false) of
+        true  -> ok;
+        false -> {error, "No auth module to check!"}
+    end;
 auth(Client, Password, [{Mod, State, _Seq} | Mods]) ->
     case catch Mod:check(Client, Password, State) of
         ok              -> ok;
+        {ok, IsSuper}   -> {ok, IsSuper};
         ignore          -> auth(Client, Password, Mods);
         {error, Reason} -> {error, Reason};
         {'EXIT', Error} -> {error, Error}
@@ -73,14 +70,11 @@ auth(Client, Password, [{Mod, State, _Seq} | Mods]) ->
       Client :: mqtt_client(),
       PubSub :: pubsub(),
       Topic  :: binary()).
-check_acl(Client, PubSub, Topic) when ?IS_PUBSUB(PubSub) ->
-    case lookup_mods(acl) of
-        []      -> allow;
-        AclMods -> check_acl(Client, PubSub, Topic, AclMods)
-    end.
-check_acl(#mqtt_client{client_id = ClientId}, PubSub, Topic, []) ->
-    lager:error("ACL: nomatch for ~s ~s ~s", [ClientId, PubSub, Topic]),
-    allow;
+check_acl(Client, PubSub, Topic) when ?PS(PubSub) ->
+    check_acl(Client, PubSub, Topic, lookup_mods(acl)).
+
+check_acl(_Client, _PubSub, _Topic, []) ->
+    emqttd:env(acl_nomatch, allow);
 check_acl(Client, PubSub, Topic, [{Mod, State, _Seq}|AclMods]) ->
     case Mod:check_acl({Client, PubSub, Topic}, State) of
         allow  -> allow;
@@ -94,16 +88,16 @@ reload_acl() ->
     [Mod:reload_acl(State) || {Mod, State, _Seq} <- lookup_mods(acl)].
 
 %% @doc Register Authentication or ACL module.
--spec(register_mod(auth | acl, atom(), list()) -> ok | {error, any()}).
+-spec(register_mod(auth | acl, atom(), list()) -> ok | {error, term()}).
 register_mod(Type, Mod, Opts) when Type =:= auth; Type =:= acl->
     register_mod(Type, Mod, Opts, 0).
 
--spec(register_mod(auth | acl, atom(), list(), non_neg_integer()) -> ok | {error, any()}).
+-spec(register_mod(auth | acl, atom(), list(), non_neg_integer()) -> ok | {error, term()}).
 register_mod(Type, Mod, Opts, Seq) when Type =:= auth; Type =:= acl->
     gen_server:call(?SERVER, {register_mod, Type, Mod, Opts, Seq}).
 
 %% @doc Unregister authentication or ACL module
--spec(unregister_mod(Type :: auth | acl, Mod :: atom()) -> ok | {error, any()}).
+-spec(unregister_mod(Type :: auth | acl, Mod :: atom()) -> ok | {error, not_found | term()}).
 unregister_mod(Type, Mod) when Type =:= auth; Type =:= acl ->
     gen_server:call(?SERVER, {unregister_mod, Type, Mod}).
 
@@ -122,23 +116,12 @@ tab_key(acl)  -> acl_modules.
 stop() -> gen_server:call(?MODULE, stop).
 
 %%--------------------------------------------------------------------
-%% gen_server callbacks
+%% gen_server Callbacks
 %%--------------------------------------------------------------------
 
-init([Opts]) ->
+init([]) ->
     ets:new(?ACCESS_CONTROL_TAB, [set, named_table, protected, {read_concurrency, true}]),
-    ets:insert(?ACCESS_CONTROL_TAB, {auth_modules, init_mods(auth, proplists:get_value(auth, Opts))}),
-    ets:insert(?ACCESS_CONTROL_TAB, {acl_modules, init_mods(acl, proplists:get_value(acl, Opts))}),
     {ok, #state{}}.
-
-init_mods(auth, AuthMods) ->
-    [init_mod(authmod(Name), Opts) || {Name, Opts} <- AuthMods];
-
-init_mods(acl, AclMods) ->
-    [init_mod(aclmod(Name), Opts) || {Name, Opts} <- AclMods].
-
-init_mod(Mod, Opts) ->
-    {ok, State} = Mod:init(Opts), {Mod, State, 0}.
 
 handle_call({register_mod, Type, Mod, Opts, Seq}, _From, State) ->
     Mods = lookup_mods(Type),
@@ -191,15 +174,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %%--------------------------------------------------------------------
 
-authmod(Name) when is_atom(Name) ->
-    mod(emqttd_auth_, Name).
-
-aclmod(Name) when is_atom(Name) ->
-    mod(emqttd_acl_, Name).
-
-mod(Prefix, Name) ->
-    list_to_atom(lists:concat([Prefix, Name])).
-
 if_existed(false, Fun) -> Fun();
+
 if_existed(_Mod, _Fun) -> {error, already_existed}.
 
