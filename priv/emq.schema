@@ -168,6 +168,11 @@ end}.
   {default, "emq@127.0.0.1"}
 ]}.
 
+%% @doc The erlang distributed protocol
+{mapping, "node.proto_dist", "vm_args.-proto_dist", [
+  %%{default, "inet_tcp"}
+]}.
+
 %% @doc Secret cookie for distributed erlang node
 {mapping, "node.cookie", "vm_args.-setcookie", [
   {default, "emqsecretcookie"}
@@ -380,7 +385,7 @@ end}.
 {translation,
  "lager.handlers",
  fun(Conf) ->
-    ErrorHandler = case cuttlefish:conf_get("log.error.file", Conf) of
+    ErrorHandler = case cuttlefish:conf_get("log.error.file", Conf, undefined) of
       undefined -> [];
       ErrorFilename -> [{lager_file_backend, [{file, ErrorFilename},
                                               {level, error},
@@ -415,7 +420,6 @@ end}.
       both -> [ConsoleHandler, ConsoleFileHandler];
       _ -> []
     end,
-
     ConsoleHandlers ++ ErrorHandler ++ InfoHandler
   end
 }.
@@ -819,6 +823,11 @@ end}.
   hidden
 ]}.
 
+{mapping, "listener.tcp.$name.reuseaddr", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
 %%--------------------------------------------------------------------
 %% SSL Listeners
 
@@ -897,6 +906,11 @@ end}.
 ]}.
 
 {mapping, "listener.ssl.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.ssl.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
@@ -988,6 +1002,16 @@ end}.
   {datatype, string}
 ]}.
 
+{mapping, "listener.ws.$name.proxy_address_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.ws.$name.proxy_port_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
 {mapping, "listener.ws.$name.proxy_protocol", "emqttd.listeners", [
   {datatype, flag}
 ]}.
@@ -1036,6 +1060,11 @@ end}.
   hidden
 ]}.
 
+{mapping, "listener.ws.$name.reuseaddr", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
 %%--------------------------------------------------------------------
 %% MQTT/WebSocket/SSL Listeners
 
@@ -1067,6 +1096,16 @@ end}.
 
 {mapping, "listener.wss.$name.access.$id", "emqttd.listeners", [
   {datatype, string}
+]}.
+
+{mapping, "listener.wss.$name.proxy_address_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
+]}.
+
+{mapping, "listener.wss.$name.proxy_port_header", "emqttd.listeners", [
+  {datatype, string},
+  hidden
 ]}.
 
 {mapping, "listener.wss.$name.proxy_protocol", "emqttd.listeners", [
@@ -1113,6 +1152,11 @@ end}.
 ]}.
 
 {mapping, "listener.wss.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.wss.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
@@ -1193,7 +1237,9 @@ end}.
                            {proxy_protocol, cuttlefish:conf_get(Prefix ++ ".proxy_protocol", Conf, undefined)},
                            {proxy_protocol_timeout, cuttlefish:conf_get(Prefix ++ ".proxy_protocol_timeout", Conf, undefined)},
                            {mountpoint, MountPoint(cuttlefish:conf_get(Prefix ++ ".mountpoint", Conf, undefined))},
-                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)}])
+                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)},
+                           {proxy_port_header, cuttlefish:conf_get(Prefix ++ ".proxy_port_header", Conf, undefined)},
+                           {proxy_address_header, cuttlefish:conf_get(Prefix ++ ".proxy_address_header", Conf, undefined)}])
                end,
 
     LisOpts = fun(Prefix) ->
@@ -1208,7 +1254,8 @@ end}.
                            {recbuf,  cuttlefish:conf_get(Prefix ++ ".recbuf", Conf, undefined)},
                            {sndbuf,  cuttlefish:conf_get(Prefix ++ ".sndbuf", Conf, undefined)},
                            {buffer,  cuttlefish:conf_get(Prefix ++ ".buffer", Conf, undefined)},
-                           {nodelay, cuttlefish:conf_get(Prefix ++ ".nodelay", Conf, true)}])
+                           {nodelay, cuttlefish:conf_get(Prefix ++ ".nodelay", Conf, true)},
+                           {reuseaddr, cuttlefish:conf_get(Prefix ++ ".reuseaddr", Conf, true)}])
               end,
 
     SplitFun = fun(undefined) -> undefined; (S) -> string:tokens(S, ",") end,
@@ -1238,7 +1285,8 @@ end}.
                            undefined ->
                                [];
                            ListenOn ->
-                               [{Atom(Type), ListenOn, [{connopts, ConnOpts(Prefix)}, {sockopts, TcpOpts(Prefix)} | LisOpts(Prefix)]}]
+                               [{Atom(Type), ListenOn, [{connopts, ConnOpts(Prefix)},
+                                                        {sockopts, TcpOpts(Prefix)} | LisOpts(Prefix)]}]
                        end
                    end,
 
@@ -1343,6 +1391,11 @@ end}.
 ]}.
 
 {mapping, "listener.api.$name.nodelay", "emqttd.listeners", [
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+{mapping, "listener.api.$name.reuseaddr", "emqttd.listeners", [
   {datatype, {enum, [true, false]}},
   hidden
 ]}.
