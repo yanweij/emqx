@@ -219,15 +219,15 @@
 -type(command() :: #command{}).
 
 %%--------------------------------------------------------------------
-%% Command
+%% Edge
 %%--------------------------------------------------------------------
 -type(edge() :: atom()).
 
--type(member_status() :: joining | up | healing | leaving | down).
+-type(edge_status() :: joining | up | healing | leaving | down).
 
--type(member, {
+-record(edge_node, {
                host     :: string(),
-               status   :: member_status()
+               status   :: edge_status()
               }).
 
--type(member() :: #member{}).
+-type(edge_node() :: #edge_node{}).

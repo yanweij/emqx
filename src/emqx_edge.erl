@@ -14,12 +14,12 @@
 
 -module(emqx_edge).
 
--include("emqx")
+-include("emqx.hrl").
 
 -export([]).
 
 %% @doc Init Edge's config
-init()
+%% init()
 
 
 
