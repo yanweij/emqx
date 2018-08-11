@@ -218,3 +218,16 @@
 
 -type(command() :: #command{}).
 
+%%--------------------------------------------------------------------
+%% Command
+%%--------------------------------------------------------------------
+-type(edge() :: atom()).
+
+-type(member_status() :: joining | up | healing | leaving | down).
+
+-type(member, {
+               host     :: string(),
+               status   :: member_status()
+              }).
+
+-type(member() :: #member{}).

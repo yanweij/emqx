@@ -1665,3 +1665,72 @@ end}.
    {busy_dist_port, cuttlefish:conf_get("sysmon.busy_dist_port", Conf)}]
 end}.
 
+%%--------------------------------------------------------------------
+%% Edge
+%%--------------------------------------------------------------------
+
+%% @doc Edge name
+{mapping, "edge.name", "emqx.edge_name", [
+  {default, emqxedge},
+  {datatype, atom}
+]}.
+
+%% @doc Edge hosts
+{mapping, "edge.hosts", "emqx.edge_hosts", [
+  {default, {"127.0.0.1", 1883}},
+  {datatype, [integer, ip, string]}
+]}.
+
+{translation, "emqx.edge_hosts", fun(Conf) ->
+  case cuttlefish:conf_get("edge.hosts", Conf) of
+    {Domain, Port} -> [{Domain, Port}];
+    H ->
+      HostsList = string:tokens(H, ","),
+      lists:map(fun(Host) ->
+            case string:tokens(Host, ":") of
+              [Domain]       -> {Domain, 1883};
+              [Domain, Port] -> {Domain, list_to_integer(Port)}
+            end
+          end, HostsList)
+  end
+end}.
+
+%% @doc Edge bridges
+{mapping, "edge.bridge", "emqx.edge_bridge", [
+  {default, {"www.emqx.com", 1883}},
+  {datatype, [integer, ip, string]}
+]}.
+
+%% @doc Edge queues
+{mapping, "edge.queues.$name", "emqx.edge_queues", [
+  {default, {"/device/#/warning"}},
+  {datatype, string},
+  {include_default, "queue1"}
+]}.
+
+{translation,
+ "emqx.edge_queues",
+ fun(Conf) ->
+     Queues = cuttlefish_variable:filter_by_prefix("listener.http", Conf),
+     [Queue || Queue <- Queues]
+ end
+}.
+
+
+%% @doc Edge Storm Name
+{mapping, "edge.storm.name", "emqx.edge_storm.name", [
+  {default, edgestorm},
+  {datatype, atom}
+]}.
+
+%% @doc Edge Storm Server
+{mapping, "edge.storm.server", "emqx.edge_storm.server", [
+  {default, "https://localhost/storm"},
+  {datatype, string}
+]}.
+
+%% @doc Edge Storm Token
+{mapping, "edge.storm.token", "emqx.edge_storm.token", [
+  {default, "yourtoken"},
+  {datatype, string}
+]}.
