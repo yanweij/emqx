@@ -63,6 +63,7 @@ init([]) ->
     BrokerSup = supervisor_spec(emqx_broker_sup),
     %% BridgeSup
     BridgeSup = supervisor_spec(emqx_bridge_sup_sup),
+    BridgeSup1 = supervisor_spec(emqx_bridge1_sup),
     %% AccessControl
     AccessControl = worker_spec(emqx_access_control),
     %% Session Manager
@@ -71,8 +72,6 @@ init([]) ->
     SessionSup = supervisor_spec(emqx_session_sup),
     %% Connection Manager
     CMSup = supervisor_spec(emqx_cm_sup),
-    %% WebSocket Connection Sup
-    WSConnSup = supervisor_spec(emqx_ws_connection_sup),
     %% Sys Sup
     SysSup = supervisor_spec(emqx_sys_sup),
     {ok, {{one_for_all, 0, 1},
@@ -80,11 +79,11 @@ init([]) ->
            RouterSup,
            BrokerSup,
            BridgeSup,
+           BridgeSup1,
            AccessControl,
            SMSup,
            SessionSup,
            CMSup,
-           WSConnSup,
            SysSup]}}.
 
 %%--------------------------------------------------------------------
