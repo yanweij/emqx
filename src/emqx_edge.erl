@@ -16,16 +16,30 @@
 
 -include("emqx.hrl").
 
--export([]).
+-import(proplists, [get_value/2, get_value/3]).
 
-%% @doc Init Edge's config
-%% init()
+-export([start/1, stop/1]).
+
+%% static edge cluster
+start(static) ->
+    emqx_edge_bridge:start().
+
+stop(static) ->
+    emqx_edge_bridge:stop().
+
+%% get_edge_hosts() ->
+%%     EdgeConf = emqx_config:get_env(edge, []),
+%%     get_value(hosts, Edge).
+
+%% get_host_num() ->
+%%    {, Interfaces} = inet:getiflist(_).
 
 
 
-%% @doc List all
+%% start() ->
+%%     EdgeNum = 2,
+%%     Hosts = get_value(hosts, EdgeConf),
+%%     EdgeLocalHost = lists:nth(EdgeNum, Hosts).
 
-%% @doc List all available hosts
-
-
-%% @doc List all available hosts
+%% update_bridge_local(EdgeNum) ->
+%%     EdgeLocalHost = lists:nth()

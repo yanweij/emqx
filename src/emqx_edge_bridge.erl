@@ -12,16 +12,16 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
--module(emqx_bridge1).
+-module(emqx_edge_bridge).
 
 -behaviour(gen_server).
 
 -include("emqx.hrl").
 -include("emqx_mqtt.hrl").
 
- -import(proplists, [get_value/2, get_value/3]).
+-import(proplists, [get_value/2, get_value/3]).
 
--export([start_link/2, start_bridge/1, stop_bridge/1, status/1]).
+-export([start/0, stop/0, start_link/2, start_bridge/1, stop_bridge/1, status/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
@@ -35,6 +35,16 @@
 
 start_link(Name, Options) ->
     gen_server:start_link({local, name(Name)}, ?MODULE, [Options], []).
+
+start() ->
+    start_bridge(beside),
+    start_bridge(cloud),
+    io:format("Start local and cloud bridge successfully.~n").
+
+stop() ->
+    stop_bridge(beside),
+    stop_bridge(cloud),
+    io:format("Stop local and cloud bridge successfully.~n").
 
 start_bridge(Name) ->
     gen_server:call(name(Name), start_bridge).
@@ -74,7 +84,7 @@ init([Options]) ->
 
 handle_call(start_bridge, _From, State = #state{client_pid = undefined}) ->
     {noreply, NewState} = handle_info(start, State),
-    {reply, <<"start bridge successfully">>, NewState};
+    {reply, <<>>, NewState};
 
 handle_call(start_bridge, _From, State) ->
     {reply, <<"bridge already started">>, State};

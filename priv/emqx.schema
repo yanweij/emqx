@@ -7,7 +7,7 @@
 
 %% @doc Cluster name
 {mapping, "cluster.name", "ekka.cluster_name", [
-  {default, emqxcl},
+  {default, emqxcluster},
   {datatype, atom}
 ]}.
 
@@ -1390,156 +1390,187 @@ end}.
       end, #{}, lists:usort(cuttlefish_variable:filter_by_prefix("zone.", Conf))))
 end}.
 
+
 %%--------------------------------------------------------------------
-%% Bridges
+%% Edges
 %%--------------------------------------------------------------------
 
-{mapping, "bridge.$name.type", "emqx.bridges", [
+%%--------------------------------------------------------------------
+%% Edges bridge
+
+{mapping, "edge.bridge.$name.type", "emqx.edge", [
   {datatype, {enum, [in, out]}}
 ]}.
 
-{mapping, "bridge.$name.store_type", "emqx.bridges", [
+{mapping, "edge.bridge.$name.store_type", "emqx.edge", [
   {datatype, {enum, [memory, disk]}}
 ]}.
 
-{mapping, "bridge.$name.address", "emqx.bridges", [
+{mapping, "edge.bridge.$name.address", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.proto_ver", "emqx.bridges", [
+{mapping, "edge.bridge.$name.proto_ver", "emqx.edge", [
   {datatype, {enum, [mqtt3, mqtt4, mqtt5]}}
 ]}.
 
-{mapping, "bridge.$name.client_id", "emqx.bridges", [
+{mapping, "edge.bridge.$name.client_id", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.clean_start", "emqx.bridges", [
+{mapping, "edge.bridge.$name.clean_start", "emqx.edge", [
   {default, true},
   {datatype, {enum, [true, false]}}
 ]}.
 
-{mapping, "bridge.$name.username", "emqx.bridges", [
+{mapping, "edge.bridge.$name.username", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.password", "emqx.bridges", [
+{mapping, "edge.bridge.$name.password", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.mountpoint", "emqx.bridges", [
+{mapping, "edge.bridge.$name.mountpoint", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.forward_rule", "emqx.bridges", [
+{mapping, "edge.bridge.$name.forward_rule", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.cacertfile", "emqx.bridges", [
+{mapping, "edge.bridge.$name.cacertfile", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.certfile", "emqx.bridges", [
+{mapping, "edge.bridge.$name.certfile", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.keyfile", "emqx.bridges", [
+{mapping, "edge.bridge.$name.keyfile", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.ciphers", "emqx.bridges", [
+{mapping, "edge.bridge.$name.ciphers", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.max_pending_messages", "emqx.bridges", [
+{mapping, "edge.bridge.$name.max_pending_messages", "emqx.edge", [
   {default, 10000},
   {datatype, integer}
 ]}.
 
-{mapping, "bridge.$name.keepalive", "emqx.bridges", [
+{mapping, "edge.bridge.$name.keepalive", "emqx.edge", [
   {default, "10s"},
   {datatype, {duration, s}}
 ]}.
 
-{mapping, "bridge.$name.tls_versions", "emqx.bridges", [
+{mapping, "edge.bridge.$name.tls_versions", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.subscription.$id.topic", "emqx.bridges", [
+{mapping, "edge.bridge.$name.subscription.$id.topic", "emqx.edge", [
   {datatype, string}
 ]}.
 
-{mapping, "bridge.$name.subscription.$id.qos", "emqx.bridges", [
+{mapping, "edge.bridge.$name.subscription.$id.qos", "emqx.edge", [
   {datatype, integer}
 ]}.
 
-{mapping, "bridge.$name.start_type", "emqx.bridges", [
+{mapping, "edge.bridge.$name.start_type", "emqx.edge", [
   {datatype, {enum, [manual, auto]}},
   {default, auto}
 ]}.
 
-{mapping, "bridge.$name.reconnect_count", "emqx.bridges", [
+{mapping, "edge.bridge.$name.reconnect_count", "emqx.edge", [
   {default, 10},
   {datatype, integer}
 ]}.
 
-{mapping, "bridge.$name.reconnect_time", "emqx.bridges", [
+{mapping, "edge.bridge.$name.reconnect_time", "emqx.edge", [
   {default, "30s"},
   {datatype, {duration, s}}
 ]}.
 
+%%--------------------------------------------------------------------
+%% Edges cluster config
+{mapping, "edge.name", "emqx.edge", [
+  {default, "emqxedge"},
+  {datatype, string}
+]}.
 
-{translation, "emqx.bridges", fun(Conf) ->
+{mapping, "edge.host", "emqx.edge", [
+  {datatype, string}
+]}.
 
+{mapping, "edge.hostslist", "emqx.edge", [
+  {datatype, string}
+]}.
+
+{mapping, "edge.cloud", "emqx.edge", [
+  {datatype, string}
+]}.
+
+{mapping, "edge.queue.$name", "emqx.edge",[
+   {default , "/device/+/warning"},
+   {datatype, string}
+]}.
+
+{translation, "emqx.edge", fun(Conf) ->
     Split = fun(undefined) -> undefined; (S) -> string:tokens(S, ",") end,
-
-    IsSsl = fun(cacertfile)   -> true;
-               (certfile)     -> true;
-               (keyfile)      -> true;
-               (ciphers)      -> true;
-               (tls_versions) -> true;
-               (_Opt)         -> false
-            end,
-
-    Parse = fun(tls_versions, Vers) ->
-                    {versions, [list_to_atom(S) || S <- Split(Vers)]};
-               (ciphers, Ciphers) ->
-                    {ciphers, Split(Ciphers)};
-               (Opt, Val) ->
-                    {Opt, Val}
-               end,
-
-    Merge = fun(Opt, Val, Opts) ->
-                case IsSsl(Opt) of
-                    true ->
-                        SslOpts = [Parse(Opt, Val)|proplists:get_value(ssl_opts, Opts, [])],
-                        lists:ukeymerge(1, [{ssl_opts, SslOpts}], Opts);
-                    false ->
-                        [{Opt, Val}|Opts]
-                end
-            end,
-    Subscriptions = fun(Name) ->
-                            Configs = cuttlefish_variable:filter_by_prefix("bridge." ++ Name ++ ".subscription", Conf),
-                            lists:zip([Topic || {_, Topic} <- lists:sort([{I, Topic} || {[_, _, "subscription", I, "topic"], Topic} <- Configs])],
-                                      [QoS || {_, QoS} <- lists:sort([{I, QoS} || {[_, _, "subscription", I, "qos"], QoS} <- Configs])])
-                    end,
-
-    maps:to_list(
-      lists:foldl(
-        fun({["bridge", Name, Opt], Val}, Acc) ->
-                maps:update_with(list_to_atom(Name),
-                                 fun(Opts) ->
-                                         Merge(list_to_atom(Opt), Val, Opts)
-                                 end, [{list_to_atom(Opt), Val},
-                                       {subscriptions, Subscriptions(Name)}], Acc);
-           (_, Acc) -> Acc
-        end, #{}, lists:usort(cuttlefish_variable:filter_by_prefix("bridge.", Conf))))
-
+    EdgeBridges = fun() ->
+        
+        IsSsl = fun(cacertfile)   -> true;
+                   (certfile)     -> true;
+                   (keyfile)      -> true;
+                   (ciphers)      -> true;
+                   (tls_versions) -> true;
+                   (_Opt)         -> false
+                end,
+    
+        Parse = fun(tls_versions, Vers) ->
+                        {versions, [list_to_atom(S) || S <- Split(Vers)]};
+                   (ciphers, Ciphers) ->
+                        {ciphers, Split(Ciphers)};
+                   (Opt, Val) ->
+                        {Opt, Val}
+                end,
+    
+        Merge = fun(Opt, Val, Opts) ->
+                    case IsSsl(Opt) of
+                        true ->
+                            SslOpts = [Parse(Opt, Val)|proplists:get_value(ssl_opts, Opts, [])],
+                            lists:ukeymerge(1, [{ssl_opts, SslOpts}], Opts);
+                        false ->
+                            [{Opt, Val}|Opts]
+                    end
+                end,
+        Subscriptions = fun(Name) ->
+                                Configs = cuttlefish_variable:filter_by_prefix("edge.bridge." ++ Name ++ ".subscription", Conf),
+                                lists:zip([Topic || {_, Topic} <- lists:sort([{I, Topic} || {[_, _, _, "subscription", I, "topic"], Topic} <- Configs])],
+                                          [QoS || {_, QoS} <- lists:sort([{I, QoS} || {[_, _, _, "subscription", I, "qos"], QoS} <- Configs])])
+                        end,
+    
+        maps:to_list(
+          lists:foldl(
+            fun({["edge", "bridge", Name, Opt], Val}, Acc) ->
+                    maps:update_with(list_to_atom(Name),
+                                     fun(Opts) ->
+                                             Merge(list_to_atom(Opt), Val, Opts)
+                                     end, [{list_to_atom(Opt), Val},
+                                           {subscriptions, Subscriptions(Name)}], Acc);
+               (_, Acc) -> Acc
+            end, #{}, lists:usort(cuttlefish_variable:filter_by_prefix("edge.bridge.", Conf))))
+    
+    end,
+    [{name, cuttlefish:conf_get("edge.name", Conf)},
+     {host, cuttlefish:conf_get("edge.host", Conf)},
+     {hostslist, Split(cuttlefish:conf_get("edge.hostslist", Conf))},
+     {cloud, cuttlefish:conf_get("edge.cloud", Conf)},
+     {queue, [Queue || {_, Queue} <- cuttlefish_variable:filter_by_prefix("edge.queue", Conf)]},
+     {bridge, EdgeBridges()}
+    ]
 end}.
-
-%%--------------------------------------------------------------------
-%% Modules
-%%--------------------------------------------------------------------
 
 {mapping, "module.presence", "emqx.modules", [
   {default, off},
@@ -1689,73 +1720,3 @@ end}.
    {busy_port, cuttlefish:conf_get("sysmon.busy_port", Conf)},
    {busy_dist_port, cuttlefish:conf_get("sysmon.busy_dist_port", Conf)}]
 end}.
-
-%%--------------------------------------------------------------------
-%% Edge
-%%--------------------------------------------------------------------
-
-%% @doc Edge name
-{mapping, "edge.name", "emqx.edge_name", [
-  {default, emqxedge},
-  {datatype, atom}
-]}.
-
-%% @doc Edge hosts
-{mapping, "edge.hosts", "emqx.edge_hosts", [
-  {default, {"127.0.0.1", 1883}},
-  {datatype, [integer, ip, string]}
-]}.
-
-{translation, "emqx.edge_hosts", fun(Conf) ->
-  case cuttlefish:conf_get("edge.hosts", Conf) of
-    {Domain, Port} -> [{Domain, Port}];
-    H ->
-      HostsList = string:tokens(H, ","),
-      lists:map(fun(Host) ->
-            case string:tokens(Host, ":") of
-              [Domain]       -> {Domain, 1883};
-              [Domain, Port] -> {Domain, list_to_integer(Port)}
-            end
-          end, HostsList)
-  end
-end}.
-
-%% @doc Edge bridges
-{mapping, "edge.bridge", "emqx.edge_bridge", [
-  {default, {"www.emqx.com", 1883}},
-  {datatype, [integer, ip, string]}
-]}.
-
-%% @doc Edge queues
-{mapping, "edge.queues.$name", "emqx.edge_queues", [
-  {default, {"/device/#/warning"}},
-  {datatype, string},
-  {include_default, "queue1"}
-]}.
-
-{translation,
- "emqx.edge_queues",
- fun(Conf) ->
-     Queues = cuttlefish_variable:filter_by_prefix("listener.http", Conf),
-     [Queue || Queue <- Queues]
- end
-}.
-
-
-%% @doc Edge Storm Name
-{mapping, "edge.storm.name", "emqx.edge_storm.name", [
-  {default, edgestorm},
-  {datatype, atom}
-]}.
-
-%% @doc Edge Storm Server
-{mapping, "edge.storm.server", "emqx.edge_storm.server", [
-  {default, "https://localhost/storm"},
-  {datatype, string}
-]}.
-
-%% @doc Edge Storm Token
-{mapping, "edge.storm.token", "emqx.edge_storm.token", [
-  {default, "yourtoken"},
-  {datatype, string}
-]}.
