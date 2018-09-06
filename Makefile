@@ -60,7 +60,7 @@ gen-clean:
 	@rm -f etc/gen.emqx.conf
 
 bbmustache:
-	$(verbose) git clone https://github.com/soranoba/bbmustache.git && pushd bbmustache && ./rebar3 compile && popd
+	$(verbose) git clone https://github.com/soranoba/bbmustache.git && cd bbmustache && ./rebar3 compile && cd ..
 
 # This hack is to generate a conf file for testing
 # relx overlay is used for release
@@ -94,7 +94,7 @@ rebar-cuttlefish: rebar-deps
 rebar-deps:
 	@rebar3 get-deps
 
-rebar-eunit:
+rebar-eunit: rebar-cuttlefish
 	@rebar3 eunit
 
 rebar-compile:
