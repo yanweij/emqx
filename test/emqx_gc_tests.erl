@@ -23,14 +23,28 @@ trigger_by_timer_test() ->
                      receive
                          {emqx_gc, timeout, Ref} ->
                              NewState = emqx_gc:timeout(State, Ref),
-                             NewRef = maps:get(tref, NewState),
-                             ?assertNot(Ref =:= NewRef),
+                             ?assertNot(maps:is_key(tref, NewState)),
                              ?assertEqual(NewState, emqx_gc:timeout(NewState, Ref)),
                              ok
                      after
                          2000 ->
                              erlang:error(timeout)
                      end
+             end).
+
+trigger_by_timer_2_test() ->
+    with_env([{conn_force_gc_interval, 1}],
+             fun() ->
+                     Gc0 = emqx_gc:init(),
+                     ?assert(maps:is_key(tref, Gc0)),
+                     %% cancel the old timer
+                     Gc1 = emqx_gc:reset(Gc0),
+                     ?assertNot(maps:is_key(tref, Gc1)),
+                     %% tigger a new timer start
+                     Gc2 = emqx_gc:inc_cnt_oct(Gc1, 1, 2),
+                     ?assert(maps:is_key(tref, Gc2)),
+                     ?assert(maps:get(tref, Gc0) =/= maps:get(tref, Gc2)),
+                     ok
              end).
 
 trigger_by_cnt_test() ->

@@ -577,9 +577,14 @@ handle_info({timeout, Timer, retry_delivery}, State = #state{retry_timer = Timer
 handle_info({timeout, Timer, check_awaiting_rel}, State = #state{await_rel_timer = Timer}) ->
     noreply(expire_awaiting_rel(State#state{await_rel_timer = undefined}));
 
-handle_info({timeout, Timer, emit_stats}, State = #state{client_id = ClientId, stats_timer = Timer}) ->
+handle_info({timeout, Timer, emit_stats},
+            State = #state{client_id = ClientId,
+                           stats_timer = Timer,
+                           gc_st = Gc0}) ->
     _ = emqx_sm:set_session_stats(ClientId, stats(State)),
-    {noreply, State#state{stats_timer = undefined}, hibernate};
+    Gc = emqx_gc:reset(Gc0), %% going to hibernate, reset gc state
+    {noreply, State#state{stats_timer = undefined,
+                          gc_st = Gc}, hibernate};
 
 handle_info({timeout, Timer, expired}, State = #state{expiry_timer = Timer}) ->
     ?LOG(info, "expired, shutdown now:(", [], State),
