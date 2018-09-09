@@ -144,7 +144,10 @@
           enqueue_stats = 0,
 
           %% Created at
-          created_at :: erlang:timestamp()
+          created_at :: erlang:timestamp(),
+
+          %% GC enforcement
+          gc_st :: emqx_gc:st()
          }).
 
 -type(spid() :: pid()).
@@ -350,7 +353,9 @@ init([Parent, #{zone        := Zone,
                    enable_stats      = get_env(Zone, enable_stats, true),
                    deliver_stats     = 0,
                    enqueue_stats     = 0,
-                   created_at        = os:timestamp()},
+                   created_at        = os:timestamp(),
+                   gc_st             = emqx_gc:init()
+                  },
     emqx_sm:register_session(ClientId, attrs(State)),
     emqx_sm:set_session_stats(ClientId, stats(State)),
     emqx_hooks:run('session.created', [#{client_id => ClientId}, info(State)]),
@@ -540,6 +545,11 @@ handle_cast(Msg, State) ->
     emqx_logger:error("[Session] unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
+handle_info({emqx_gc, timeout, Ref}, #state{gc_st = Gc0} = State0) ->
+    %% GC timer timeout
+    Gc = emqx_gc:timeout(Gc0, Ref),
+    State = State0#state{gc_st = Gc},
+    {noreply, State};
 %% Batch dispatch
 handle_info({dispatch, Topic, Msgs}, State) when is_list(Msgs) ->
     {noreply, lists:foldl(fun(Msg, NewState) ->
@@ -744,21 +754,22 @@ dispatch(Msg, State = #state{client_id = ClientId, conn_pid = undefined}) ->
     end;
 
 %% Deliver qos0 message directly to client
-dispatch(Msg = #message{qos = ?QOS0}, State) ->
+dispatch(Msg = #message{qos = ?QOS0} = Msg, State) ->
     deliver(undefined, Msg, State),
-    inc_stats(deliver, State);
+    inc_stats(deliver, Msg, State);
 
-dispatch(Msg = #message{qos = QoS}, State = #state{next_pkt_id = PacketId, inflight = Inflight})
+dispatch(Msg = #message{qos = QoS} = Msg,
+         State = #state{next_pkt_id = PacketId, inflight = Inflight})
   when QoS =:= ?QOS1 orelse QoS =:= ?QOS2 ->
     case emqx_inflight:is_full(Inflight) of
         true -> enqueue_msg(Msg, State);
         false ->
             deliver(PacketId, Msg, State),
-            await(PacketId, Msg, inc_stats(deliver, next_pkt_id(State)))
+            await(PacketId, Msg, inc_stats(deliver, Msg, next_pkt_id(State)))
     end.
 
 enqueue_msg(Msg, State = #state{mqueue = Q}) ->
-    inc_stats(enqueue, State#state{mqueue = emqx_mqueue:in(Msg, Q)}).
+    inc_stats(enqueue, Msg, State#state{mqueue = emqx_mqueue:in(Msg, Q)}).
 
 %%------------------------------------------------------------------------------
 %% Deliver
@@ -882,10 +893,18 @@ next_pkt_id(State = #state{next_pkt_id = Id}) ->
 %%------------------------------------------------------------------------------
 %% Inc stats
 
-inc_stats(deliver, State = #state{deliver_stats = I}) ->
-    State#state{deliver_stats = I + 1};
-inc_stats(enqueue, State = #state{enqueue_stats = I}) ->
+inc_stats(deliver, Msg, State = #state{deliver_stats = I, gc_st = Gc0}) ->
+    MsgSize = msg_size(Msg),
+    Gc = emqx_gc:inc_cnt_oct(Gc0, 1, MsgSize),
+    State#state{deliver_stats = I + 1, gc_st = Gc};
+inc_stats(enqueue, _Msg, State = #state{enqueue_stats = I}) ->
     State#state{enqueue_stats = I + 1}.
+
+%% Take only the payload size into account, add other fields if necessary
+msg_size(#message{payload = Payload}) -> payload_size(Payload).
+
+%% Payload should be binary(), but not 100% sure. Need dialyzer!
+payload_size(Payload) -> erlang:iolist_size(Payload).
 
 %%------------------------------------------------------------------------------
 %% Helper functions
@@ -902,5 +921,3 @@ noreply(State) ->
 shutdown(Reason, State) ->
     {stop, {shutdown, Reason}, State}.
 
-%% TODO: GC Policy and Shutdown Policy
-%% maybe_gc(State) -> State.
