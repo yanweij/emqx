@@ -19,12 +19,17 @@
 trigger_by_timer_test() ->
     with_env([{conn_force_gc_interval, 1}],
              fun() ->
-                     State = emqx_gc:init(),
+                     ok = emqx_gc:inc(0, 0),
                      receive
                          {emqx_gc, timeout, Ref} ->
-                             NewState = emqx_gc:timeout(State, Ref),
-                             ?assertNot(maps:is_key(tref, NewState)),
-                             ?assertEqual(NewState, emqx_gc:timeout(NewState, Ref)),
+                             ok = emqx_gc:timeout(Ref),
+                             St0 = inspect(),
+                             ?assertNot(maps:is_key(tref, St0)),
+                             %% calling timeout/1 again with stale ref should
+                             %% not changing anything.
+                             ok = emqx_gc:timeout(Ref),
+                             St1 = inspect(),
+                             ?assertEqual(St0, St1),
                              ok
                      after
                          2000 ->
@@ -35,15 +40,18 @@ trigger_by_timer_test() ->
 trigger_by_timer_2_test() ->
     with_env([{conn_force_gc_interval, 1}],
              fun() ->
-                     Gc0 = emqx_gc:init(),
-                     ?assert(maps:is_key(tref, Gc0)),
+                     ok = emqx_gc:inc(0, 0), %% trigger gc-stats init
+                     St0 = inspect(),
+                     ?assert(maps:is_key(tref, St0)),
                      %% cancel the old timer
-                     Gc1 = emqx_gc:reset(Gc0),
-                     ?assertNot(maps:is_key(tref, Gc1)),
+                     ok = emqx_gc:reset(),
+                     St1 = inspect(),
+                     ?assertNot(maps:is_key(tref, St1)),
                      %% tigger a new timer start
-                     Gc2 = emqx_gc:inc_cnt_oct(Gc1, 1, 2),
-                     ?assert(maps:is_key(tref, Gc2)),
-                     ?assert(maps:get(tref, Gc0) =/= maps:get(tref, Gc2)),
+                     ok = emqx_gc:inc(1, 2),
+                     St2 = inspect(),
+                     ?assert(maps:is_key(tref, St2)),
+                     ?assert(maps:get(tref, St0) =/= maps:get(tref, St2)),
                      ok
              end).
 
@@ -53,11 +61,14 @@ trigger_by_cnt_test() ->
               {conn_force_gc_interval, 0} %% disable
              ],
              fun() ->
-                     St0 = emqx_gc:init(),
-                     St1 = emqx_gc:inc_cnt_oct(St0, 1, 1000),
+                     ok = emqx_gc:inc(1, 1000),
+                     St1 = inspect(),
                      ?assertMatch({_, Remain} when Remain > 0, maps:get(cnt, St1)),
-                     St2 = emqx_gc:inc_cnt_oct(St1, 2, 2),
-                     ?assertEqual(St2, emqx_gc:inc_cnt_oct(St2, 0, 2000)),
+                     ok = emqx_gc:inc(2, 2),
+                     St2 = inspect(),
+                     ok = emqx_gc:inc(0, 2000),
+                     St3 = inspect(),
+                     ?assertEqual(St2, St3),
                      ?assertMatch({N, N}, maps:get(cnt, St2)),
                      ?assertNot(maps:is_key(oct, St2)),
                      ok
@@ -70,10 +81,11 @@ trigger_by_oct_test() ->
               {conn_force_gc_interval, 0} %% disable
              ],
              fun() ->
-                     St0 = emqx_gc:init(),
-                     St1 = emqx_gc:inc_cnt_oct(St0, 1, 1),
+                     ok = emqx_gc:inc(1, 1),
+                     St1 = inspect(),
                      ?assertMatch({_, Remain} when Remain > 0, maps:get(oct, St1)),
-                     St2 = emqx_gc:inc_cnt_oct(St1, 2, 2),
+                     ok = emqx_gc:inc(2, 2),
+                     St2 = inspect(),
                      ?assertMatch({N, N}, maps:get(oct, St2)),
                      ?assertMatch({M, M}, maps:get(cnt, St2)),
                      ok
@@ -83,7 +95,9 @@ get_env(Key) -> application:get_env(?APPLICATION, Key).
 set_env(Key, Val) -> application:set_env(?APPLICATION, Key, Val).
 unset_env(Key) -> application:unset_env(?APPLICATION, Key).
 
-with_env([], F) -> F();
+with_env([], F) ->
+    erlang:erase(emqx_gc),
+    F();
 with_env([{Key, Val} | Rest], F) ->
     Origin = get_env(Key),
     try
@@ -96,3 +110,4 @@ with_env([{Key, Val} | Rest], F) ->
         end
     end.
 
+inspect() -> erlang:get(emqx_gc).

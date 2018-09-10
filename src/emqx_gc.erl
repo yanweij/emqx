@@ -35,17 +35,44 @@
 
 -author("Feng Lee <feng@emqtt.io>").
 
--export([init/0, inc_cnt_oct/3, timeout/2, reset/1]).
--export_type([st/0]).
+-export([inc/2, timeout/1, reset/0]).
 
--opaque st() :: #{ cnt => {integer(), integer()}
-                 , oct => {integer(), integer()}
-                 , sec => integer()
-                 , ref => reference()
-                 , tref => expired | reference()
-                 }.
+-type st() :: #{ cnt => {integer(), integer()}
+               , oct => {integer(), integer()}
+               , sec => integer()
+               , ref => reference()
+               , tref => expired | reference()
+               }.
 -define(disabled, disabled).
 -define(timeout(Ref), {?MODULE, timeout, Ref}).
+
+%% @doc Increase count and bytes stats in one call,
+%% ensure gc is triggered at most once, even if both thresholds are hit.
+-spec inc(pos_integer(), pos_integer()) -> ok.
+inc(Cnt, Oct) ->
+    mutate_pd_with(fun(St) -> inc(St, Cnt, Oct) end).
+
+%% @doc This function sholld be called when the ?timeout(reference()) message
+%% is received by self()
+-spec timeout(reference()) -> ok.
+timeout(Ref) ->
+    mutate_pd_with(fun(St) -> timeout(St, Ref) end).
+
+%% @doc Reset counters to zero, and cancel gc-timer if started.
+-spec reset() -> ok.
+reset() ->
+    mutate_pd_with(fun(St) -> reset(St) end).
+
+%% ======== Internals ========
+
+%% mutate gc stats numbers in process dict with the given function
+mutate_pd_with(F) ->
+    St = case erlang:get(?MODULE) of
+             undefined -> F(init());
+             St0 -> F(St0)
+         end,
+    erlang:put(?MODULE, St),
+    ok.
 
 -spec init() -> st().
 init() ->
@@ -57,28 +84,26 @@ init() ->
     Part3 = [{sec, Sec} || is_integer(Sec)],
     maybe_start_timer(maps:from_list(lists:append([Part1, Part2, Part3]))).
 
-%% @doc Increase count and bytes stats in one call,
+%% Increase count and bytes stats in one call,
 %% ensure gc is triggered at most once, even if both thresholds are hit.
--spec inc_cnt_oct(st(), pos_integer(), pos_integer()) -> st().
-inc_cnt_oct(St0, Cnt, Oct) ->
-    case inc(St0, cnt, Cnt) of
+-spec inc(st(), pos_integer(), pos_integer()) -> st().
+inc(St0, Cnt, Oct) ->
+    case do_inc(St0, cnt, Cnt) of
         {true, St} ->
             St;
         {false, St1} ->
-            {_, St} = inc(St1, oct, Oct),
+            {_, St} = do_inc(St1, oct, Oct),
             St
     end.
 
-%% @doc This function sholld be called when the ?timeout(reference()) message
+%% This function sholld be called when the ?timeout(reference()) message
 %% is received by self()
 -spec timeout(st(), reference()) -> st().
 timeout(#{ref := Ref} = St, Ref) -> do_gc(St#{tref := expired});
 timeout(St, _) -> St. %% timeout race with cancel-timer
 
-%% @doc Reset counters to zero, and cancel gc-timer if started.
+%% Reset counters to zero, and cancel gc-timer if started.
 reset(St) -> reset(cnt, reset(oct, reset_timer(St))).
-
-%% ======== Internals ========
 
 %% maybe start gc timer.
 maybe_start_timer(#{tref := Ref} = St) when is_reference(Ref) ->
@@ -94,8 +119,8 @@ maybe_start_timer(St) ->
     %% Timer based GC is not enabled
     St.
 
--spec inc(st(), cnt | oct, pos_integer()) -> {boolean(), st()}.
-inc(St, Key, Num) ->
+-spec do_inc(st(), cnt | oct, pos_integer()) -> {boolean(), st()}.
+do_inc(St, Key, Num) ->
     case maps:get(Key, St, ?disabled) of
         ?disabled ->
             {false, maybe_start_timer(St)};

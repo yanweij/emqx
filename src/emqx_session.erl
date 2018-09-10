@@ -144,10 +144,7 @@
           enqueue_stats = 0,
 
           %% Created at
-          created_at :: erlang:timestamp(),
-
-          %% GC enforcement
-          gc_st :: emqx_gc:st()
+          created_at :: erlang:timestamp()
          }).
 
 -type(spid() :: pid()).
@@ -353,8 +350,7 @@ init([Parent, #{zone        := Zone,
                    enable_stats      = get_env(Zone, enable_stats, true),
                    deliver_stats     = 0,
                    enqueue_stats     = 0,
-                   created_at        = os:timestamp(),
-                   gc_st             = emqx_gc:init()
+                   created_at        = os:timestamp()
                   },
     emqx_sm:register_session(ClientId, attrs(State)),
     emqx_sm:set_session_stats(ClientId, stats(State)),
@@ -545,10 +541,9 @@ handle_cast(Msg, State) ->
     emqx_logger:error("[Session] unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({emqx_gc, timeout, Ref}, #state{gc_st = Gc0} = State0) ->
+handle_info({emqx_gc, timeout, Ref}, #state{} = State) ->
     %% GC timer timeout
-    Gc = emqx_gc:timeout(Gc0, Ref),
-    State = State0#state{gc_st = Gc},
+    ok = emqx_gc:timeout(Ref),
     {noreply, State};
 %% Batch dispatch
 handle_info({dispatch, Topic, Msgs}, State) when is_list(Msgs) ->
@@ -579,12 +574,10 @@ handle_info({timeout, Timer, check_awaiting_rel}, State = #state{await_rel_timer
 
 handle_info({timeout, Timer, emit_stats},
             State = #state{client_id = ClientId,
-                           stats_timer = Timer,
-                           gc_st = Gc0}) ->
+                           stats_timer = Timer}) ->
     _ = emqx_sm:set_session_stats(ClientId, stats(State)),
-    Gc = emqx_gc:reset(Gc0), %% going to hibernate, reset gc state
-    {noreply, State#state{stats_timer = undefined,
-                          gc_st = Gc}, hibernate};
+    ok = emqx_gc:reset(), %% going to hibernate, reset gc stats
+    {noreply, State#state{stats_timer = undefined}, hibernate};
 
 handle_info({timeout, Timer, expired}, State = #state{expiry_timer = Timer}) ->
     ?LOG(info, "expired, shutdown now:(", [], State),
@@ -898,10 +891,10 @@ next_pkt_id(State = #state{next_pkt_id = Id}) ->
 %%------------------------------------------------------------------------------
 %% Inc stats
 
-inc_stats(deliver, Msg, State = #state{deliver_stats = I, gc_st = Gc0}) ->
+inc_stats(deliver, Msg, State = #state{deliver_stats = I}) ->
     MsgSize = msg_size(Msg),
-    Gc = emqx_gc:inc_cnt_oct(Gc0, 1, MsgSize),
-    State#state{deliver_stats = I + 1, gc_st = Gc};
+    ok = emqx_gc:inc(1, MsgSize),
+    State#state{deliver_stats = I + 1};
 inc_stats(enqueue, _Msg, State = #state{enqueue_stats = I}) ->
     State#state{enqueue_stats = I + 1}.
 
